@@ -311,5 +311,5 @@ document.getElementById("clear-logs-button").addEventListener("click", async () 
 
 Promise.all([loadModels(), loadStatus(), loadMetrics(), loadLogs()]);
 window.setInterval(loadStatus, 3000);
-window.setInterval(loadMetrics, 1000);
+window.setInterval(loadMetrics, 1200);
 window.setInterval(loadLogs, 3000);

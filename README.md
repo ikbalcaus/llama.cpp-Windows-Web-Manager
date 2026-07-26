@@ -105,7 +105,8 @@ options.
 - frontend and model directories
 - llama-server, Caddy, Caddyfile, and ngrok paths
 - llama.cpp, Flask, and Caddy hosts/ports
-- context size, mmap, reasoning, alias, mmproj, and MTP options
+- default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`), mmap, reasoning, alias,
+  mmproj, and MTP options
 - maximum in-memory website console lines (`WEB_LOG_LINES`)
 - tray enablement and tooltip (`TRAY_ENABLED`, `TRAY_TOOLTIP`)
 - ngrok domain and optional `NGROK_AUTHTOKEN`
@@ -119,10 +120,10 @@ Caddy also reads the host and port variables from the environment passed by
 |---|---|---|
 | `GET` | `/api/models` | List loadable models |
 | `GET` | `/api/status` | Current model process state |
-| `POST` | `/api/start` | Load or reload `{"model":"name.gguf"}` |
+| `POST` | `/api/start` | Load or reload `{"model":"name.gguf","context_size":16384}` |
 | `POST` | `/api/stop` | Unload the current model |
-| `POST` | `/api/restart` | Restart a model |
-| `GET` | `/api/command?model=name.gguf` | Safe command preview |
+| `POST` | `/api/restart` | Restart a model with an optional `context_size` |
+| `GET` | `/api/command?model=name.gguf&context_size=16384` | Safe command preview |
 | `GET` | `/api/metrics` | CPU, RAM, GPU, and VRAM sample |
 | `GET` | `/api/logs` | Recent in-memory llama-server output |
 | `POST` | `/api/logs/clear` | Clear the website console |

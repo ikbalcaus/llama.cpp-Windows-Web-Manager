@@ -6,6 +6,8 @@ const modelList = document.getElementById("model-list");
 const statusPill = document.getElementById("status-pill");
 const statusLabel = document.getElementById("status-label");
 const logsNode = document.getElementById("logs");
+const contextSizeSlider = document.getElementById("context-size-slider");
+const contextSizeOutput = document.getElementById("context-size-output");
 
 const metricNodes = {
   cpu_percent: document.getElementById("cpu-value"),
@@ -22,6 +24,7 @@ const chartPaths = {
 
 const metricHistory = [];
 const maxHistoryPoints = 30;
+const contextSizes = [16384, 32768, 65536, 131072];
 let models = [];
 let latestStatus = { running: false, selected_model: null };
 let busy = false;
@@ -82,6 +85,7 @@ function updateControls() {
   document.getElementById("refresh-button").disabled = busy;
   document.getElementById("clear-graphs-button").disabled = busy;
   document.getElementById("clear-logs-button").disabled = busy;
+  contextSizeSlider.disabled = busy;
 }
 
 function renderStatus(status) {
@@ -145,7 +149,14 @@ function renderModels() {
     load.dataset.loadModel = model.filename;
     load.textContent = "Load";
     load.addEventListener("click", () => {
-      performAction(api.start, { model: model.filename }, "");
+      performAction(
+        api.start,
+        {
+          model: model.filename,
+          context_size: contextSizes[Number(contextSizeSlider.value)],
+        },
+        "",
+      );
     });
 
     actions.append(load, unload);
@@ -270,6 +281,14 @@ async function loadLogs() {
     setNotice("Console unavailable", true);
   }
 }
+
+function updateContextSizeOutput() {
+  const contextSize = contextSizes[Number(contextSizeSlider.value)];
+  contextSizeOutput.value = `${contextSize / 1024}K`;
+}
+
+contextSizeSlider.addEventListener("input", updateContextSizeOutput);
+updateContextSizeOutput();
 
 document.getElementById("refresh-button").addEventListener("click", async () => {
   await Promise.all([loadModels(), loadStatus(), loadLogs()]);

@@ -48,7 +48,7 @@ FLASK_HOST = os.environ["FLASK_HOST"]
 FLASK_PORT = int(os.environ["FLASK_PORT"])
 CADDY_PORT = int(os.environ["CADDY_PORT"])
 NGROK_DOMAIN = os.environ["NGROK_DOMAIN"]
-LLAMA_CONTEXT_SIZE = int(os.environ["LLAMA_CONTEXT_SIZE"])
+LLAMA_DEFAULT_CONTEXT_SIZE = int(os.environ["LLAMA_DEFAULT_CONTEXT_SIZE"])
 LLAMA_REASONING = os.environ["LLAMA_REASONING"]
 LLAMA_ALIAS = os.environ["LLAMA_ALIAS"]
 LLAMA_MTP_SPEC_TYPE = os.environ["LLAMA_MTP_SPEC_TYPE"]
@@ -60,6 +60,8 @@ LLAMA_NO_MMPROJ_OFFLOAD = (
 WEB_LOG_LINES = int(os.environ["WEB_LOG_LINES"])
 TRAY_ENABLED = os.environ["TRAY_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
 TRAY_TOOLTIP = os.environ["TRAY_TOOLTIP"].strip()
+
+ALLOWED_CONTEXT_SIZES = (16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024)
 
 
 class ForwardedPrefixMiddleware:
@@ -82,6 +84,17 @@ def utc_now() -> str:
 
 def normalized_path(path: str | Path) -> str:
     return os.path.normcase(str(Path(path).resolve()))
+
+
+def validate_context_size(value: Any) -> int:
+    if value is None:
+        value = LLAMA_DEFAULT_CONTEXT_SIZE
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("context_size must be an integer")
+    if value not in ALLOWED_CONTEXT_SIZES:
+        allowed = ", ".join(str(size) for size in ALLOWED_CONTEXT_SIZES)
+        raise ValueError(f"context_size must be one of: {allowed}")
+    return value
 
 
 class LlamaServerManager:
@@ -127,8 +140,9 @@ class LlamaServerManager:
             raise ValueError("invalid model path")
         return candidate
 
-    def build_command(self, filename: Any) -> list[str]:
+    def build_command(self, filename: Any, context_size: Any = None) -> list[str]:
         model_path = self._validated_model_path(filename)
+        selected_context_size = validate_context_size(context_size)
         if not self.executable.is_file():
             raise FileNotFoundError(f"llama-server executable not found: {self.executable}")
         command = [
@@ -144,7 +158,11 @@ class LlamaServerManager:
         command.extend(
             [
                 "-c",
-                str(LLAMA_CONTEXT_SIZE),
+                str(selected_context_size),
+                "-np",
+                "1",
+                "--parallel",
+                "1",
                 "--reasoning",
                 LLAMA_REASONING,
                 "--alias",
@@ -242,9 +260,9 @@ class LlamaServerManager:
                 "owned": owned,
             }
 
-    def start(self, filename: Any) -> dict[str, Any]:
+    def start(self, filename: Any, context_size: Any = None) -> dict[str, Any]:
         with self._lock:
-            command = self.build_command(filename)
+            command = self.build_command(filename, context_size)
             matches = self._matching_processes()
             if matches:
                 self.stop()
@@ -314,17 +332,17 @@ class LlamaServerManager:
             self._started_at = None
             return self.status()
 
-    def restart(self, filename: Any | None) -> dict[str, Any]:
+    def restart(self, filename: Any | None, context_size: Any = None) -> dict[str, Any]:
         with self._lock:
             selected = filename or self.status().get("selected_model")
             if not selected:
                 raise ValueError("select a model before restarting")
             self._validated_model_path(selected)
             self.stop()
-            return self.start(selected)
+            return self.start(selected, context_size)
 
-    def command_preview(self, filename: Any) -> str:
-        return subprocess.list2cmdline(self.build_command(filename))
+    def command_preview(self, filename: Any, context_size: Any = None) -> str:
+        return subprocess.list2cmdline(self.build_command(filename, context_size))
 
     def logs(self, limit: int = 120) -> list[dict[str, str]]:
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= WEB_LOG_LINES:
@@ -577,6 +595,10 @@ def security_headers(response: Response) -> Response:
 def index() -> str:
     return render_template(
         "index.html",
+        default_context_size=LLAMA_DEFAULT_CONTEXT_SIZE,
+        default_context_index=ALLOWED_CONTEXT_SIZES.index(
+            LLAMA_DEFAULT_CONTEXT_SIZE
+        ),
         api_urls={
             "models": url_for("api_models"),
             "status": url_for("api_status"),
@@ -608,7 +630,8 @@ def api_status() -> Response:
 @app.post("/api/start")
 def api_start() -> tuple[Response, int] | Response:
     try:
-        status = manager.start(require_json_object().get("model"))
+        payload = require_json_object()
+        status = manager.start(payload.get("model"), payload.get("context_size"))
         return jsonify(status)
     except (ValueError, FileNotFoundError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -625,7 +648,7 @@ def api_stop() -> Response:
 def api_restart() -> tuple[Response, int] | Response:
     try:
         payload = require_json_object()
-        status = manager.restart(payload.get("model"))
+        status = manager.restart(payload.get("model"), payload.get("context_size"))
         return jsonify(status)
     except (ValueError, FileNotFoundError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -658,7 +681,22 @@ def api_clear_logs() -> Response:
 @app.get("/api/command")
 def api_command() -> tuple[Response, int] | Response:
     try:
-        return jsonify({"command": manager.command_preview(request.args.get("model"))})
+        raw_context_size = request.args.get("context_size")
+        context_size: Any = None
+        if raw_context_size is not None:
+            context_size = (
+                int(raw_context_size)
+                if raw_context_size.isascii() and raw_context_size.isdecimal()
+                else raw_context_size
+            )
+        return jsonify(
+            {
+                "command": manager.command_preview(
+                    request.args.get("model"),
+                    context_size,
+                )
+            }
+        )
     except (ValueError, FileNotFoundError) as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -692,6 +730,7 @@ def resolve_ngrok_path() -> Path:
 
 
 def validate_configuration() -> None:
+    validate_context_size(LLAMA_DEFAULT_CONTEXT_SIZE)
     for name, port in (
         ("LLAMA_PORT", LLAMA_PORT),
         ("FLASK_PORT", FLASK_PORT),

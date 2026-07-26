@@ -154,6 +154,68 @@ h1 {
   gap: 9px;
 }
 
+.context-control {
+  margin-top: 24px;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(4, 9, 8, 0.42);
+}
+
+.context-control-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.context-control-heading label {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.context-control output {
+  min-width: 58px;
+  padding: 5px 10px;
+  border: 1px solid rgba(126, 226, 184, 0.28);
+  border-radius: 999px;
+  color: var(--accent);
+  background: rgba(126, 226, 184, 0.08);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+#context-size-slider {
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+#context-size-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.context-range-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.68rem;
+}
+
+#context-size-help {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .model-card {
   min-width: 0;
   gap: 14px;

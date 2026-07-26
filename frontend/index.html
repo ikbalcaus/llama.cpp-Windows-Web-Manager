@@ -34,6 +34,34 @@
       <div class="model-list" id="model-list" aria-live="polite">
         <p class="empty">Scanning the models folder…</p>
       </div>
+      <div class="context-control">
+        <div class="context-control-heading">
+          <label for="context-size-slider">Context size</label>
+          <output id="context-size-output" for="context-size-slider">{{ default_context_size // 1024 }}K</output>
+        </div>
+        <input
+          id="context-size-slider"
+          type="range"
+          min="0"
+          max="3"
+          step="1"
+          value="{{ default_context_index }}"
+          list="context-size-marks"
+          aria-describedby="context-size-help"
+        >
+        <datalist id="context-size-marks">
+          <option value="0" label="16K"></option>
+          <option value="1" label="32K"></option>
+          <option value="2" label="64K"></option>
+          <option value="3" label="128K"></option>
+        </datalist>
+        <div class="context-range-labels" aria-hidden="true">
+          <span>16K</span>
+          <span>32K</span>
+          <span>64K</span>
+          <span>128K</span>
+        </div>
+      </div>
     </section>
 
     <section class="panel usage-panel">

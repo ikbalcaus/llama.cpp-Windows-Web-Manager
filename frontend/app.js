@@ -236,6 +236,11 @@ async function loadMetrics() {
 async function loadLogs() {
   try {
     const payload = await requestJson(`${api.logs}?limit=120`);
+    const distanceFromBottom =
+      logsNode.scrollHeight - logsNode.scrollTop - logsNode.clientHeight;
+    const shouldFollowLatest = distanceFromBottom <= 24;
+    const previousScrollTop = logsNode.scrollTop;
+
     logsNode.replaceChildren();
     if (!payload.logs.length) {
       const empty = document.createElement("p");
@@ -258,7 +263,9 @@ async function loadLogs() {
       line.append(time, source, message);
       logsNode.append(line);
     });
-    logsNode.scrollTop = logsNode.scrollHeight;
+    logsNode.scrollTop = shouldFollowLatest
+      ? logsNode.scrollHeight
+      : previousScrollTop;
   } catch (error) {
     setNotice("Console unavailable", true);
   }

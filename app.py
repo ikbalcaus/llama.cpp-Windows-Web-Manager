@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import csv
 import io
+import ipaddress
 import os
 import re
 import shutil
@@ -767,13 +768,82 @@ def terminate_service(process: subprocess.Popen[Any] | None) -> None:
             continue
 
 
+def detect_lan_ipv4() -> str | None:
+    if os.name != "nt":
+        return None
+
+    try:
+        result = subprocess.run(
+            ["ipconfig"],
+            capture_output=True,
+            text=True,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except OSError:
+        return None
+
+    address_pattern = re.compile(
+        r"IPv4 Address[^:]*:\s*(\d{1,3}(?:\.\d{1,3}){3})",
+        re.IGNORECASE,
+    )
+    candidates: list[str] = []
+    for adapter in re.split(r"(?:\r?\n){2,}", result.stdout):
+        match = address_pattern.search(adapter)
+        if match is None:
+            continue
+        address = match.group(1)
+        try:
+            parsed_address = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if (
+            not parsed_address.is_private
+            or parsed_address.is_loopback
+            or parsed_address.is_link_local
+        ):
+            continue
+        candidates.append(address)
+
+        gateway_offset = adapter.lower().find("default gateway")
+        if gateway_offset >= 0:
+            gateway_text = adapter[gateway_offset:]
+            gateway_addresses = re.findall(
+                r"\d{1,3}(?:\.\d{1,3}){3}",
+                gateway_text,
+            )
+            if gateway_addresses:
+                return address
+
+    return candidates[0] if candidates else None
+
+
 def add_startup_messages() -> None:
     public_base = f"https://{NGROK_DOMAIN}"
-    messages = (
+    public_messages = [
         f"llama.cpp UI started on {public_base}/{LLAMA_PORT}",
         f"llama.cpp Windows Web Manager started on {public_base}/{FLASK_PORT}",
         f"Caddy started on {public_base}/{CADDY_PORT}",
-    )
+    ]
+    lan_ipv4 = detect_lan_ipv4()
+    if lan_ipv4 is not None:
+        local_base = f"http://{lan_ipv4}"
+        messages = [
+            (
+                f"llama.cpp UI started on \"{local_base}:{LLAMA_PORT}\" "
+                f"and \"{public_base}/{LLAMA_PORT}\""
+            ),
+            (
+                "llama.cpp Windows Web Manager started on \""
+                f"{local_base}:{FLASK_PORT}\" and \"{public_base}/{FLASK_PORT}\""
+            ),
+            (
+                f"Caddy started on \"{local_base}:{CADDY_PORT}\" "
+                f"and \"{public_base}/{CADDY_PORT}\""
+            ),
+        ]
+    else:
+        messages = public_messages
     terminal_time = datetime.now().astimezone().strftime("%H:%M:%S")
     for message in messages:
         manager._append_log("startup", message)

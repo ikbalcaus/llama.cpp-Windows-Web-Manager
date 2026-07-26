@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>llama-settings</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='favicon-dark.svg') }}"
+        type="image/svg+xml" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="shell" id="app" data-api='{{ api_urls | tojson }}'>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">LOCAL INFERENCE</p>
+        <h1>llama.cpp Control Room</h1>
+        <p class="subtitle">Choose a GGUF model and manage the local inference server.</p>
+      </div>
+      <div class="status-pill" id="status-pill" aria-live="polite">
+        <span class="status-dot"></span>
+        <span id="status-label">Checking…</span>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">MODEL LIBRARY</p>
+        </div>
+        <button class="button secondary" id="refresh-button" type="button">Refresh</button>
+      </div>
+      <div class="model-list" id="model-list" aria-live="polite">
+        <p class="empty">Scanning the models folder…</p>
+      </div>
+    </section>
+
+    <section class="panel usage-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">RESOURCE MONITOR</p>
+        </div>
+        <button class="button secondary" id="clear-graphs-button" type="button">Clear monitors</button>
+      </div>
+      <div class="resource-grid">
+        <article class="resource-chart cpu-chart">
+          <div class="resource-chart-header">
+            <h3><i class="series-mark cpu"></i>CPU</h3>
+            <strong id="cpu-value">—</strong>
+          </div>
+          <svg class="usage-svg" viewBox="0 0 500 210" preserveAspectRatio="none"
+               role="img" aria-label="CPU percentage over time">
+            <g class="chart-grid">
+              <rect x="12" y="12" width="434" height="180"></rect>
+              <line x1="12" y1="57" x2="446" y2="57"></line>
+              <line x1="12" y1="102" x2="446" y2="102"></line>
+              <line x1="12" y1="147" x2="446" y2="147"></line>
+            </g>
+            <g class="chart-axis-labels" aria-hidden="true">
+              <text x="492" y="16">100%</text><text x="492" y="61">75%</text>
+              <text x="492" y="106">50%</text><text x="492" y="151">25%</text>
+              <text x="492" y="196">0%</text>
+            </g>
+            <path id="cpu-path" class="usage-line cpu" d=""></path>
+          </svg>
+        </article>
+
+        <article class="resource-chart gpu-chart">
+          <div class="resource-chart-header">
+            <h3><i class="series-mark gpu"></i>GPU</h3>
+            <strong id="gpu-value">—</strong>
+          </div>
+          <svg class="usage-svg" viewBox="0 0 500 210" preserveAspectRatio="none"
+               role="img" aria-label="GPU percentage over time">
+            <g class="chart-grid">
+              <rect x="12" y="12" width="434" height="180"></rect>
+              <line x1="12" y1="57" x2="446" y2="57"></line>
+              <line x1="12" y1="102" x2="446" y2="102"></line>
+              <line x1="12" y1="147" x2="446" y2="147"></line>
+            </g>
+            <g class="chart-axis-labels" aria-hidden="true">
+              <text x="492" y="16">100%</text><text x="492" y="61">75%</text>
+              <text x="492" y="106">50%</text><text x="492" y="151">25%</text>
+              <text x="492" y="196">0%</text>
+            </g>
+            <path id="gpu-path" class="usage-line gpu" d=""></path>
+          </svg>
+        </article>
+
+        <article class="resource-chart ram-chart">
+          <div class="resource-chart-header">
+            <h3><i class="series-mark ram"></i>RAM</h3>
+            <strong id="ram-value">—</strong>
+          </div>
+          <svg class="usage-svg" viewBox="0 0 500 210" preserveAspectRatio="none"
+               role="img" aria-label="RAM percentage over time">
+            <g class="chart-grid">
+              <rect x="12" y="12" width="434" height="180"></rect>
+              <line x1="12" y1="57" x2="446" y2="57"></line>
+              <line x1="12" y1="102" x2="446" y2="102"></line>
+              <line x1="12" y1="147" x2="446" y2="147"></line>
+            </g>
+            <g class="chart-axis-labels" aria-hidden="true">
+              <text x="492" y="16">100%</text><text x="492" y="61">75%</text>
+              <text x="492" y="106">50%</text><text x="492" y="151">25%</text>
+              <text x="492" y="196">0%</text>
+            </g>
+            <path id="ram-path" class="usage-line ram" d=""></path>
+          </svg>
+        </article>
+
+        <article class="resource-chart vram-chart">
+          <div class="resource-chart-header">
+            <h3><i class="series-mark vram"></i>VRAM</h3>
+            <strong id="vram-value">—</strong>
+          </div>
+          <svg class="usage-svg" viewBox="0 0 500 210" preserveAspectRatio="none"
+               role="img" aria-label="VRAM percentage over time">
+            <g class="chart-grid">
+              <rect x="12" y="12" width="434" height="180"></rect>
+              <line x1="12" y1="57" x2="446" y2="57"></line>
+              <line x1="12" y1="102" x2="446" y2="102"></line>
+              <line x1="12" y1="147" x2="446" y2="147"></line>
+            </g>
+            <g class="chart-axis-labels" aria-hidden="true">
+              <text x="492" y="16">100%</text><text x="492" y="61">75%</text>
+              <text x="492" y="106">50%</text><text x="492" y="151">25%</text>
+              <text x="492" y="196">0%</text>
+            </g>
+            <path id="vram-path" class="usage-line vram" d=""></path>
+          </svg>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel logs-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">RECENT OUTPUT</p>
+        </div>
+        <button class="button secondary" id="clear-logs-button" type="button">Clear console</button>
+      </div>
+      <div class="logs" id="logs" role="log" aria-live="polite">
+        <p class="log-empty">No output logs yet.</p>
+      </div>
+    </section>
+
+  </main>
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>

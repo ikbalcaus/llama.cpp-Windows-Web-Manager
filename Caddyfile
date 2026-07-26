@@ -1,0 +1,33 @@
+{
+	auto_https off
+	admin off
+}
+
+:{$CADDY_PORT} {
+	@root path /
+	redir @root /{$FLASK_PORT}/ 308
+
+	@llama_bare path /{$LLAMA_PORT}
+	redir @llama_bare /{$LLAMA_PORT}/ 308
+
+	handle_path /{$LLAMA_PORT}/* {
+		reverse_proxy {$LLAMA_HOST}:{$LLAMA_PORT} {
+			header_up X-Forwarded-Prefix /{$LLAMA_PORT}
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	@flask_bare path /{$FLASK_PORT}
+	redir @flask_bare /{$FLASK_PORT}/ 308
+
+	handle_path /{$FLASK_PORT}/* {
+		reverse_proxy {$FLASK_HOST}:{$FLASK_PORT} {
+			header_up X-Forwarded-Prefix /{$FLASK_PORT}
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}

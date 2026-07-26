@@ -771,6 +771,22 @@ class ServiceProcess:
     command: list[str]
     process: subprocess.Popen[Any] | None = None
 
+    def stop_existing(self) -> None:
+        expected_name = Path(self.command[0]).name.casefold()
+        expected_arguments = [argument.casefold() for argument in self.command[1:]]
+        for process in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                command_line = process.info.get("cmdline") or []
+                if not command_line:
+                    continue
+                process_name = (process.info.get("name") or "").casefold()
+                arguments = [argument.casefold() for argument in command_line[1:]]
+                if process_name != expected_name or arguments != expected_arguments:
+                    continue
+                terminate_process_tree(process)
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                continue
+
     def start(self, environment: dict[str, str]) -> None:
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.process = subprocess.Popen(
@@ -785,11 +801,8 @@ class ServiceProcess:
         )
 
 
-def terminate_service(process: subprocess.Popen[Any] | None) -> None:
-    if process is None or process.poll() is not None:
-        return
+def terminate_process_tree(parent: psutil.Process) -> None:
     try:
-        parent = psutil.Process(process.pid)
         children = parent.children(recursive=True)
     except (psutil.AccessDenied, psutil.NoSuchProcess):
         return
@@ -805,6 +818,16 @@ def terminate_service(process: subprocess.Popen[Any] | None) -> None:
             target.kill()
         except (psutil.AccessDenied, psutil.NoSuchProcess):
             continue
+
+
+def terminate_service(process: subprocess.Popen[Any] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    try:
+        parent = psutil.Process(process.pid)
+    except (psutil.AccessDenied, psutil.NoSuchProcess):
+        return
+    terminate_process_tree(parent)
 
 
 def detect_lan_ipv4() -> str | None:
@@ -971,6 +994,8 @@ def run() -> int:
             ]
         ),
     ]
+    for service in services:
+        service.stop_existing()
     for service in services:
         service.start(environment)
     add_startup_messages()

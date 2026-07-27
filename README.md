@@ -4,12 +4,12 @@
 
 The complete runtime now lives in `app.py`. Running it starts:
 
-- llama.cpp models on `127.0.0.1:8080` when loaded from the UI
-- Flask/Waitress on `127.0.0.1:8081`
-- Caddy on `127.0.0.1:8082`
-- ngrok forwarding the reserved domain to Caddy
+- llama.cpp models on `0.0.0.0:8080` when loaded from the UI
+- Flask/Waitress on `0.0.0.0:8081`
+- Caddy on `0.0.0.0:8082`
+- ngrok forwarding the reserved domain to Caddy only when `ENABLE_NGROK=true`
 
-The public routes are:
+When ngrok is enabled, the public routes are:
 
 ```text
 {NGROK_DOMAIN}/8080/  -> llama.cpp
@@ -34,8 +34,14 @@ python -m pip install -r .\requirements.txt
 ```
 
 The checked-in `.env` contains the current local paths, ports, model options,
-and ngrok domain. Edit it if the project moves or a port changes. If ngrok is
-not already authenticated through its normal configuration, add this locally:
+and optional ngrok settings. Ngrok is disabled by default:
+
+```dotenv
+ENABLE_NGROK=false
+```
+
+Set it to `true` to enable the tunnel. If ngrok is not already authenticated
+through its normal configuration, add this locally:
 
 ```dotenv
 NGROK_AUTHTOKEN=your_real_agent_token
@@ -51,8 +57,8 @@ Start the entire stack with one command:
 
 On Windows this starts the notification-area icon. Double-click it to open the
 settings page. A single left-click does nothing. Right-click it to open Settings,
-open the llama.cpp UI, or choose **Exit**. Exit cleanly stops
-Flask, Caddy, ngrok, and any llama-server process loaded by the UI.
+open the llama.cpp UI, or choose **Exit**. Exit cleanly stops Flask, Caddy,
+ngrok when enabled, and any llama-server process loaded by the UI.
 
 To start minimized without a PowerShell window, use:
 
@@ -71,7 +77,7 @@ For console-only operation without a tray icon, use:
 ```
 
 In console-only mode, `Ctrl+C` performs the same clean shutdown.
-Child executables use `CREATE_NO_WINDOW`. Caddy and ngrok output is discarded;
+Child executables use `CREATE_NO_WINDOW`. Caddy and enabled ngrok output is discarded;
 llama-server output is kept only in bounded memory for the website console. It
 is never printed by `app.py` and is never written to a log file. The three
 startup URL announcements are printed only when a console is present.
@@ -103,13 +109,13 @@ options.
 `app.py` loads these values from `.env`:
 
 - frontend and model directories
-- llama-server, Caddy, Caddyfile, and ngrok paths
+- llama-server, Caddy, and Caddyfile paths; the ngrok path only when enabled
 - llama.cpp, Flask, and Caddy hosts/ports
 - default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`), reasoning, alias, mmproj,
   and MTP options
 - maximum in-memory website console lines (`WEB_LOG_LINES`)
 - tray enablement and tooltip (`TRAY_ENABLED`, `TRAY_TOOLTIP`)
-- ngrok domain and optional `NGROK_AUTHTOKEN`
+- ngrok enablement (`ENABLE_NGROK`), domain, and optional `NGROK_AUTHTOKEN`
 
 Caddy also reads the host and port variables from the environment passed by
 `app.py`.

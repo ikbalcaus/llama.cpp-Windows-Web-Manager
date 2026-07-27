@@ -47,7 +47,13 @@ LLAMA_PORT = int(os.environ["LLAMA_PORT"])
 FLASK_HOST = os.environ["FLASK_HOST"]
 FLASK_PORT = int(os.environ["FLASK_PORT"])
 CADDY_PORT = int(os.environ["CADDY_PORT"])
-NGROK_DOMAIN = os.environ["NGROK_DOMAIN"]
+ENABLE_NGROK = os.environ.get("ENABLE_NGROK", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+NGROK_DOMAIN = os.environ.get("NGROK_DOMAIN", "")
 LLAMA_DEFAULT_CONTEXT_SIZE = int(os.environ["LLAMA_DEFAULT_CONTEXT_SIZE"])
 LLAMA_REASONING = os.environ["LLAMA_REASONING"]
 LLAMA_ALIAS = os.environ["LLAMA_ALIAS"]
@@ -760,23 +766,25 @@ def validate_configuration() -> None:
     ):
         if not 1 <= port <= 65535:
             raise ValueError(f"{name} must be between 1 and 65535")
-    labels = NGROK_DOMAIN.strip().lower().split(".")
-    if (
-        not labels
-        or any(not label or len(label) > 63 for label in labels)
-        or any(label.startswith("-") or label.endswith("-") for label in labels)
-        or any(
-            not all(character.isalnum() or character == "-" for character in label)
-            for label in labels
-        )
-    ):
-        raise ValueError("NGROK_DOMAIN must be a valid hostname")
+    if ENABLE_NGROK:
+        labels = NGROK_DOMAIN.strip().lower().split(".")
+        if (
+            not labels
+            or any(not label or len(label) > 63 for label in labels)
+            or any(label.startswith("-") or label.endswith("-") for label in labels)
+            or any(
+                not all(character.isalnum() or character == "-" for character in label)
+                for label in labels
+            )
+        ):
+            raise ValueError("NGROK_DOMAIN must be a valid hostname")
     required = {
         "LLAMA_SERVER_PATH": LLAMA_SERVER_PATH,
         "CADDY_PATH": CADDY_PATH,
         "CADDYFILE_PATH": CADDYFILE_PATH,
-        "NGROK_PATH": resolve_ngrok_path(),
     }
+    if ENABLE_NGROK:
+        required["NGROK_PATH"] = resolve_ngrok_path()
     missing = [
         f"{name}={path}"
         for name, path in required.items()
@@ -908,15 +916,18 @@ def local_service_url(port: int) -> str:
 
 
 def add_startup_messages() -> None:
-    public_base = f"https://{NGROK_DOMAIN}"
-    public_messages = [
-        f"llama.cpp UI started on {public_base}/{LLAMA_PORT}",
-        f"llama.cpp Windows Web Manager started on {public_base}/{FLASK_PORT}",
-        f"Caddy started on {public_base}/{CADDY_PORT}",
+    lan_ipv4 = detect_lan_ipv4() or "127.0.0.1"
+    local_base = f"http://{lan_ipv4}"
+    local_messages = [
+        f'llama.cpp UI started on "{local_base}:{LLAMA_PORT}"',
+        (
+            "llama.cpp Windows Web Manager started on "
+            f'"{local_base}:{FLASK_PORT}"'
+        ),
+        f'Caddy started on "{local_base}:{CADDY_PORT}"',
     ]
-    lan_ipv4 = detect_lan_ipv4()
-    if lan_ipv4 is not None:
-        local_base = f"http://{lan_ipv4}"
+    if ENABLE_NGROK:
+        public_base = f"https://{NGROK_DOMAIN}"
         messages = [
             (
                 f"llama.cpp UI started on \"{local_base}:{LLAMA_PORT}\" "
@@ -932,7 +943,7 @@ def add_startup_messages() -> None:
             ),
         ]
     else:
-        messages = public_messages
+        messages = local_messages
     terminal_time = datetime.now().astimezone().strftime("%H:%M:%S")
     for message in messages:
         manager._append_log("startup", message)
@@ -994,11 +1005,7 @@ def create_tray_icon(shutdown: Any) -> Any:
     )
 
 
-def run() -> int:
-    from waitress import create_server
-
-    validate_configuration()
-    environment = os.environ.copy()
+def build_service_processes() -> list[ServiceProcess]:
     services = [
         ServiceProcess(
             [
@@ -1009,16 +1016,28 @@ def run() -> int:
                 "--adapter",
                 "caddyfile",
             ]
-        ),
-        ServiceProcess(
-            [
-                str(resolve_ngrok_path()),
-                "http",
-                str(CADDY_PORT),
-                f"--url={NGROK_DOMAIN}",
-            ]
-        ),
+        )
     ]
+    if ENABLE_NGROK:
+        services.append(
+            ServiceProcess(
+                [
+                    str(resolve_ngrok_path()),
+                    "http",
+                    str(CADDY_PORT),
+                    f"--url={NGROK_DOMAIN}",
+                ]
+            )
+        )
+    return services
+
+
+def run() -> int:
+    from waitress import create_server
+
+    validate_configuration()
+    environment = os.environ.copy()
+    services = build_service_processes()
     for service in services:
         service.stop_existing()
     for service in services:

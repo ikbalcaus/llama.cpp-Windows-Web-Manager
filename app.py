@@ -117,6 +117,7 @@ class LlamaServerManager:
         self._process: subprocess.Popen[str] | None = None
         self._selected_model: str | None = None
         self._context_size: int | None = None
+        self._load_mmproj: bool | None = None
         self._started_at: str | None = None
         self._logs: deque[dict[str, str]] = deque(maxlen=WEB_LOG_LINES)
         self._lock = threading.RLock()
@@ -234,6 +235,13 @@ class LlamaServerManager:
                 return int(raw_context_size)
         return None
 
+    def _load_mmproj_from_process(self, process: psutil.Process) -> bool | None:
+        try:
+            arguments = process.cmdline()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            return None
+        return "--mmproj" in arguments
+
     def _append_log(self, source: str, message: str) -> None:
         cleaned = message.rstrip("\r\n")
         if not cleaned:
@@ -269,11 +277,13 @@ class LlamaServerManager:
             if process is None:
                 self._process = None
                 self._context_size = None
+                self._load_mmproj = None
                 return {
                     "running": False,
                     "pid": None,
                     "selected_model": self._selected_model,
                     "context_size": None,
+                    "load_mmproj": None,
                     "started_at": self._started_at,
                     "process_count": 0,
                     "owned": False,
@@ -285,11 +295,17 @@ class LlamaServerManager:
                 if owned
                 else self._context_size_from_process(process)
             )
+            load_mmproj = (
+                self._load_mmproj
+                if owned
+                else self._load_mmproj_from_process(process)
+            )
             return {
                 "running": True,
                 "pid": process.pid,
                 "selected_model": selected,
                 "context_size": context_size,
+                "load_mmproj": load_mmproj,
                 "started_at": self._started_at if owned else None,
                 "process_count": len(matches),
                 "owned": owned,
@@ -303,10 +319,11 @@ class LlamaServerManager:
     ) -> dict[str, Any]:
         with self._lock:
             selected_context_size = validate_context_size(context_size)
+            selected_load_mmproj = validate_load_mmproj(load_mmproj)
             command = self.build_command(
                 filename,
                 selected_context_size,
-                load_mmproj,
+                selected_load_mmproj,
             )
             matches = self._matching_processes()
             if matches:
@@ -336,6 +353,7 @@ class LlamaServerManager:
             self._process = process
             self._selected_model = Path(str(filename)).name
             self._context_size = selected_context_size
+            self._load_mmproj = selected_load_mmproj
             self._started_at = utc_now()
             threading.Thread(
                 target=self._capture_output,
@@ -373,6 +391,7 @@ class LlamaServerManager:
                 self._process = None
                 self._selected_model = None
                 self._context_size = None
+                self._load_mmproj = None
                 self._started_at = None
                 return self.status()
             for process in matches:
@@ -380,6 +399,7 @@ class LlamaServerManager:
             self._process = None
             self._selected_model = None
             self._context_size = None
+            self._load_mmproj = None
             self._started_at = None
             return self.status()
 

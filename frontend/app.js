@@ -8,6 +8,7 @@ const statusLabel = document.getElementById("status-label");
 const logsNode = document.getElementById("logs");
 const contextSizeSlider = document.getElementById("context-size-slider");
 const contextSizeOutput = document.getElementById("context-size-output");
+contextSizeSlider.dataset.userModified = "false";
 
 const metricNodes = {
   cpu_percent: document.getElementById("cpu-value"),
@@ -26,7 +27,11 @@ const metricHistory = [];
 const maxHistoryPoints = 30;
 const contextSizes = [16384, 32768, 65536, 131072];
 let models = [];
-let latestStatus = { running: false, selected_model: null };
+let latestStatus = {
+  running: false,
+  selected_model: null,
+  load_mmproj: null,
+};
 let busy = false;
 let logsPointerActive = false;
 let preserveLogSelectionUntil = 0;
@@ -93,12 +98,44 @@ function updateControls() {
   contextSizeSlider.disabled = busy;
 }
 
+function syncMmprojControls() {
+  if (
+    !latestStatus.running
+    || typeof latestStatus.load_mmproj !== "boolean"
+  ) {
+    return;
+  }
+  document.querySelectorAll("[data-load-mmproj]").forEach((checkbox) => {
+    if (
+      checkbox.dataset.loadMmproj === latestStatus.selected_model
+      && checkbox.dataset.userModified !== "true"
+    ) {
+      checkbox.checked = latestStatus.load_mmproj;
+    }
+  });
+}
+
+function syncContextSizeSlider() {
+  if (
+    !latestStatus.running
+    || contextSizeSlider.dataset.userModified === "true"
+  ) {
+    return;
+  }
+  const activeIndex = contextSizes.indexOf(latestStatus.context_size);
+  if (activeIndex >= 0) {
+    contextSizeSlider.value = String(activeIndex);
+  }
+}
+
 function renderStatus(status) {
   latestStatus = status;
   statusPill.classList.remove("error");
   statusPill.classList.toggle("online", status.running);
   statusLabel.textContent = status.running ? "Server online" : "Server stopped";
+  syncContextSizeSlider();
   updateContextSizeOutput();
+  syncMmprojControls();
   updateControls();
 }
 
@@ -147,8 +184,17 @@ function renderModels() {
       mmprojControl.className = "mmproj-toggle";
       mmprojToggle = document.createElement("input");
       mmprojToggle.type = "checkbox";
-      mmprojToggle.checked = true;
+      mmprojToggle.checked = (
+        isLoaded(model.filename)
+        && typeof latestStatus.load_mmproj === "boolean"
+      )
+        ? latestStatus.load_mmproj
+        : true;
       mmprojToggle.dataset.loadMmproj = model.filename;
+      mmprojToggle.dataset.userModified = "false";
+      mmprojToggle.addEventListener("change", () => {
+        mmprojToggle.dataset.userModified = "true";
+      });
       mmprojToggle.setAttribute(
         "aria-label",
         `Load MMPROJ for ${model.name}`,
@@ -354,7 +400,10 @@ function updateContextSizeOutput() {
     : `${selectedContextSize / 1024}K`;
 }
 
-contextSizeSlider.addEventListener("input", updateContextSizeOutput);
+contextSizeSlider.addEventListener("input", () => {
+  contextSizeSlider.dataset.userModified = "true";
+  updateContextSizeOutput();
+});
 updateContextSizeOutput();
 
 document.getElementById("refresh-button").addEventListener("click", async () => {

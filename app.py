@@ -53,7 +53,6 @@ LLAMA_REASONING = os.environ["LLAMA_REASONING"]
 LLAMA_ALIAS = os.environ["LLAMA_ALIAS"]
 LLAMA_MTP_SPEC_TYPE = os.environ["LLAMA_MTP_SPEC_TYPE"]
 LLAMA_MTP_DRAFT_N_MAX = int(os.environ["LLAMA_MTP_DRAFT_N_MAX"])
-LLAMA_NO_MMAP = os.environ["LLAMA_NO_MMAP"].strip().lower() in {"1", "true", "yes", "on"}
 LLAMA_NO_MMPROJ_OFFLOAD = (
     os.environ["LLAMA_NO_MMPROJ_OFFLOAD"].strip().lower() in {"1", "true", "yes", "on"}
 )
@@ -103,6 +102,7 @@ class LlamaServerManager:
         self.models_dir = models_dir
         self._process: subprocess.Popen[str] | None = None
         self._selected_model: str | None = None
+        self._context_size: int | None = None
         self._started_at: str | None = None
         self._logs: deque[dict[str, str]] = deque(maxlen=WEB_LOG_LINES)
         self._lock = threading.RLock()
@@ -159,18 +159,12 @@ class LlamaServerManager:
             [
                 "-c",
                 str(selected_context_size),
-                "-np",
-                "1",
-                "--parallel",
-                "1",
                 "--reasoning",
                 LLAMA_REASONING,
                 "--alias",
                 LLAMA_ALIAS,
             ]
         )
-        if LLAMA_NO_MMAP:
-            command.insert(command.index("--reasoning"), "--no-mmap")
         command.extend(["--host", LLAMA_HOST, "--port", str(LLAMA_PORT)])
         if "mtp" in model_path.name.lower():
             command.extend(
@@ -207,6 +201,19 @@ class LlamaServerManager:
                     return candidate.name
         return None
 
+    def _context_size_from_process(self, process: psutil.Process) -> int | None:
+        try:
+            arguments = process.cmdline()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            return None
+        for index, argument in enumerate(arguments[:-1]):
+            if argument not in {"-c", "--ctx-size"}:
+                continue
+            raw_context_size = arguments[index + 1]
+            if raw_context_size.isascii() and raw_context_size.isdecimal():
+                return int(raw_context_size)
+        return None
+
     def _append_log(self, source: str, message: str) -> None:
         cleaned = message.rstrip("\r\n")
         if not cleaned:
@@ -241,20 +248,28 @@ class LlamaServerManager:
             process = matches[0] if matches else None
             if process is None:
                 self._process = None
+                self._context_size = None
                 return {
                     "running": False,
                     "pid": None,
                     "selected_model": self._selected_model,
+                    "context_size": None,
                     "started_at": self._started_at,
                     "process_count": 0,
                     "owned": False,
                 }
             owned = self._process is not None and self._process.pid == process.pid
             selected = self._selected_model or self._model_from_process(process)
+            context_size = (
+                self._context_size
+                if owned
+                else self._context_size_from_process(process)
+            )
             return {
                 "running": True,
                 "pid": process.pid,
                 "selected_model": selected,
+                "context_size": context_size,
                 "started_at": self._started_at if owned else None,
                 "process_count": len(matches),
                 "owned": owned,
@@ -262,10 +277,14 @@ class LlamaServerManager:
 
     def start(self, filename: Any, context_size: Any = None) -> dict[str, Any]:
         with self._lock:
-            command = self.build_command(filename, context_size)
+            selected_context_size = validate_context_size(context_size)
+            command = self.build_command(filename, selected_context_size)
             matches = self._matching_processes()
             if matches:
                 self.stop()
+
+            command_message = subprocess.list2cmdline(command)
+            self._append_log("manager", command_message)
 
             creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             try:
@@ -287,6 +306,7 @@ class LlamaServerManager:
 
             self._process = process
             self._selected_model = Path(str(filename)).name
+            self._context_size = selected_context_size
             self._started_at = utc_now()
             threading.Thread(
                 target=self._capture_output,
@@ -323,12 +343,14 @@ class LlamaServerManager:
             if not matches:
                 self._process = None
                 self._selected_model = None
+                self._context_size = None
                 self._started_at = None
                 return self.status()
             for process in matches:
                 self._terminate_process_tree(process)
             self._process = None
             self._selected_model = None
+            self._context_size = None
             self._started_at = None
             return self.status()
 
@@ -880,6 +902,11 @@ def detect_lan_ipv4() -> str | None:
     return candidates[0] if candidates else None
 
 
+def local_service_url(port: int) -> str:
+    host = detect_lan_ipv4() or "127.0.0.1"
+    return f"http://{host}:{port}/"
+
+
 def add_startup_messages() -> None:
     public_base = f"https://{NGROK_DOMAIN}"
     public_messages = [
@@ -946,13 +973,11 @@ def create_tray_icon(shutdown: Any) -> Any:
                 return None
             return super()._on_notify(wparam, normalized)
 
-    public_base = f"https://{NGROK_DOMAIN}"
-
     def open_settings(_: Any = None, __: Any = None) -> None:
-        webbrowser.open(f"{public_base}/{FLASK_PORT}/", new=2)
+        webbrowser.open(local_service_url(FLASK_PORT), new=2)
 
     def open_llama_ui(_: Any = None, __: Any = None) -> None:
-        webbrowser.open(f"{public_base}/{LLAMA_PORT}/", new=2)
+        webbrowser.open(local_service_url(LLAMA_PORT), new=2)
 
     def exit_application(icon: Any, _: Any = None) -> None:
         shutdown()

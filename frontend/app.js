@@ -28,6 +28,8 @@ const contextSizes = [16384, 32768, 65536, 131072];
 let models = [];
 let latestStatus = { running: false, selected_model: null };
 let busy = false;
+let logsPointerActive = false;
+let preserveLogSelectionUntil = 0;
 
 function formatBytes(bytes) {
   if (bytes === null || bytes === undefined) return "—";
@@ -93,6 +95,7 @@ function renderStatus(status) {
   statusPill.classList.remove("error");
   statusPill.classList.toggle("online", status.running);
   statusLabel.textContent = status.running ? "Server online" : "Server stopped";
+  updateContextSizeOutput();
   updateControls();
 }
 
@@ -244,9 +247,28 @@ async function loadMetrics() {
   }
 }
 
+function hasLogTextSelection() {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return false;
+  return (
+    logsNode.contains(selection.anchorNode)
+    || logsNode.contains(selection.focusNode)
+  );
+}
+
+function shouldPreserveLogSelection() {
+  return (
+    logsPointerActive
+    || Date.now() < preserveLogSelectionUntil
+    || hasLogTextSelection()
+  );
+}
+
 async function loadLogs() {
   try {
     const payload = await requestJson(`${api.logs}?limit=120`);
+    if (shouldPreserveLogSelection()) return;
+
     const distanceFromBottom =
       logsNode.scrollHeight - logsNode.scrollTop - logsNode.clientHeight;
     const shouldFollowLatest = distanceFromBottom <= 24;
@@ -282,9 +304,26 @@ async function loadLogs() {
   }
 }
 
+logsNode.addEventListener("pointerdown", () => {
+  logsPointerActive = true;
+});
+window.addEventListener("pointerup", () => {
+  logsPointerActive = false;
+  preserveLogSelectionUntil = Date.now() + 500;
+});
+window.addEventListener("pointercancel", () => {
+  logsPointerActive = false;
+  preserveLogSelectionUntil = Date.now() + 500;
+});
+
 function updateContextSizeOutput() {
-  const contextSize = contextSizes[Number(contextSizeSlider.value)];
-  contextSizeOutput.value = `${contextSize / 1024}K`;
+  const selectedContextSize = contextSizes[Number(contextSizeSlider.value)];
+  const activeContextSize = latestStatus.running
+    ? latestStatus.context_size
+    : null;
+  contextSizeOutput.value = activeContextSize
+    ? `${activeContextSize / 1024}K in use`
+    : `${selectedContextSize / 1024}K`;
 }
 
 contextSizeSlider.addEventListener("input", updateContextSizeOutput);
@@ -311,5 +350,5 @@ document.getElementById("clear-logs-button").addEventListener("click", async () 
 
 Promise.all([loadModels(), loadStatus(), loadMetrics(), loadLogs()]);
 window.setInterval(loadStatus, 3000);
-window.setInterval(loadMetrics, 1200);
+window.setInterval(loadMetrics, 1100);
 window.setInterval(loadLogs, 3000);

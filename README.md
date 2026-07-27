@@ -105,8 +105,8 @@ options.
 - frontend and model directories
 - llama-server, Caddy, Caddyfile, and ngrok paths
 - llama.cpp, Flask, and Caddy hosts/ports
-- default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`), mmap, reasoning, alias,
-  mmproj, and MTP options
+- default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`), reasoning, alias, mmproj,
+  and MTP options
 - maximum in-memory website console lines (`WEB_LOG_LINES`)
 - tray enablement and tooltip (`TRAY_ENABLED`, `TRAY_TOOLTIP`)
 - ngrok domain and optional `NGROK_AUTHTOKEN`

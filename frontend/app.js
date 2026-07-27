@@ -81,6 +81,9 @@ function updateControls() {
   document.querySelectorAll("[data-unload-model]").forEach((button) => {
     button.disabled = busy || !isLoaded(button.dataset.unloadModel);
   });
+  document.querySelectorAll("[data-load-mmproj]").forEach((checkbox) => {
+    checkbox.disabled = busy;
+  });
   document.querySelectorAll(".model-card").forEach((card) => {
     card.classList.toggle("loaded", isLoaded(card.dataset.model));
   });
@@ -137,6 +140,30 @@ function renderModels() {
     const actions = document.createElement("div");
     actions.className = "model-actions";
 
+    let mmprojToggle = null;
+    if (model.has_mmproj) {
+      actions.classList.add("has-mmproj");
+      const mmprojControl = document.createElement("label");
+      mmprojControl.className = "mmproj-toggle";
+      mmprojToggle = document.createElement("input");
+      mmprojToggle.type = "checkbox";
+      mmprojToggle.checked = true;
+      mmprojToggle.dataset.loadMmproj = model.filename;
+      mmprojToggle.setAttribute(
+        "aria-label",
+        `Load MMPROJ for ${model.name}`,
+      );
+      const switchTrack = document.createElement("span");
+      switchTrack.className = "switch-track";
+      switchTrack.setAttribute("aria-hidden", "true");
+      const switchLabel = document.createElement("span");
+      switchLabel.className = "switch-label";
+      switchLabel.textContent = "MMPROJ";
+      mmprojControl.title = "Load MMPROJ";
+      mmprojControl.append(mmprojToggle, switchLabel, switchTrack);
+      actions.append(mmprojControl);
+    }
+
     const unload = document.createElement("button");
     unload.type = "button";
     unload.className = "button danger";
@@ -157,6 +184,7 @@ function renderModels() {
         {
           model: model.filename,
           context_size: contextSizes[Number(contextSizeSlider.value)],
+          load_mmproj: mmprojToggle ? mmprojToggle.checked : false,
         },
         "",
       );

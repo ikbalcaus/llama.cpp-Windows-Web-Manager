@@ -102,6 +102,14 @@ def validate_context_size(value: Any) -> int:
     return value
 
 
+def validate_load_mmproj(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, bool):
+        raise ValueError("load_mmproj must be a boolean")
+    return value
+
+
 class LlamaServerManager:
     def __init__(self, executable: Path, models_dir: Path) -> None:
         self.executable = executable
@@ -146,9 +154,15 @@ class LlamaServerManager:
             raise ValueError("invalid model path")
         return candidate
 
-    def build_command(self, filename: Any, context_size: Any = None) -> list[str]:
+    def build_command(
+        self,
+        filename: Any,
+        context_size: Any = None,
+        load_mmproj: Any = None,
+    ) -> list[str]:
         model_path = self._validated_model_path(filename)
         selected_context_size = validate_context_size(context_size)
+        should_load_mmproj = validate_load_mmproj(load_mmproj)
         if not self.executable.is_file():
             raise FileNotFoundError(f"llama-server executable not found: {self.executable}")
         command = [
@@ -157,7 +171,7 @@ class LlamaServerManager:
             str(model_path),
         ]
         mmproj_path = model_path.with_name(f"{model_path.stem}-mmproj.gguf")
-        if mmproj_path.is_file():
+        if should_load_mmproj and mmproj_path.is_file():
             command.extend(["--mmproj", str(mmproj_path)])
             if LLAMA_NO_MMPROJ_OFFLOAD:
                 command.append("--no-mmproj-offload")
@@ -281,10 +295,19 @@ class LlamaServerManager:
                 "owned": owned,
             }
 
-    def start(self, filename: Any, context_size: Any = None) -> dict[str, Any]:
+    def start(
+        self,
+        filename: Any,
+        context_size: Any = None,
+        load_mmproj: Any = None,
+    ) -> dict[str, Any]:
         with self._lock:
             selected_context_size = validate_context_size(context_size)
-            command = self.build_command(filename, selected_context_size)
+            command = self.build_command(
+                filename,
+                selected_context_size,
+                load_mmproj,
+            )
             matches = self._matching_processes()
             if matches:
                 self.stop()
@@ -360,17 +383,29 @@ class LlamaServerManager:
             self._started_at = None
             return self.status()
 
-    def restart(self, filename: Any | None, context_size: Any = None) -> dict[str, Any]:
+    def restart(
+        self,
+        filename: Any | None,
+        context_size: Any = None,
+        load_mmproj: Any = None,
+    ) -> dict[str, Any]:
         with self._lock:
             selected = filename or self.status().get("selected_model")
             if not selected:
                 raise ValueError("select a model before restarting")
             self._validated_model_path(selected)
             self.stop()
-            return self.start(selected, context_size)
+            return self.start(selected, context_size, load_mmproj)
 
-    def command_preview(self, filename: Any, context_size: Any = None) -> str:
-        return subprocess.list2cmdline(self.build_command(filename, context_size))
+    def command_preview(
+        self,
+        filename: Any,
+        context_size: Any = None,
+        load_mmproj: Any = None,
+    ) -> str:
+        return subprocess.list2cmdline(
+            self.build_command(filename, context_size, load_mmproj)
+        )
 
     def logs(self, limit: int = 120) -> list[dict[str, str]]:
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= WEB_LOG_LINES:
@@ -659,7 +694,11 @@ def api_status() -> Response:
 def api_start() -> tuple[Response, int] | Response:
     try:
         payload = require_json_object()
-        status = manager.start(payload.get("model"), payload.get("context_size"))
+        status = manager.start(
+            payload.get("model"),
+            payload.get("context_size"),
+            payload.get("load_mmproj"),
+        )
         return jsonify(status)
     except (ValueError, FileNotFoundError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -676,7 +715,11 @@ def api_stop() -> Response:
 def api_restart() -> tuple[Response, int] | Response:
     try:
         payload = require_json_object()
-        status = manager.restart(payload.get("model"), payload.get("context_size"))
+        status = manager.restart(
+            payload.get("model"),
+            payload.get("context_size"),
+            payload.get("load_mmproj"),
+        )
         return jsonify(status)
     except (ValueError, FileNotFoundError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -710,6 +753,7 @@ def api_clear_logs() -> Response:
 def api_command() -> tuple[Response, int] | Response:
     try:
         raw_context_size = request.args.get("context_size")
+        raw_load_mmproj = request.args.get("load_mmproj")
         context_size: Any = None
         if raw_context_size is not None:
             context_size = (
@@ -717,11 +761,21 @@ def api_command() -> tuple[Response, int] | Response:
                 if raw_context_size.isascii() and raw_context_size.isdecimal()
                 else raw_context_size
             )
+        load_mmproj: Any = None
+        if raw_load_mmproj is not None:
+            lowered = raw_load_mmproj.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                load_mmproj = True
+            elif lowered in {"0", "false", "no", "off"}:
+                load_mmproj = False
+            else:
+                load_mmproj = raw_load_mmproj
         return jsonify(
             {
                 "command": manager.command_preview(
                     request.args.get("model"),
                     context_size,
+                    load_mmproj,
                 )
             }
         )

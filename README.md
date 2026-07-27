@@ -126,10 +126,10 @@ Caddy also reads the host and port variables from the environment passed by
 |---|---|---|
 | `GET` | `/api/models` | List loadable models |
 | `GET` | `/api/status` | Current model process state |
-| `POST` | `/api/start` | Load or reload `{"model":"name.gguf","context_size":16384}` |
+| `POST` | `/api/start` | Load or reload with `model`, `context_size`, and optional `load_mmproj` |
 | `POST` | `/api/stop` | Unload the current model |
-| `POST` | `/api/restart` | Restart a model with an optional `context_size` |
-| `GET` | `/api/command?model=name.gguf&context_size=16384` | Safe command preview |
+| `POST` | `/api/restart` | Restart with optional `context_size` and `load_mmproj` |
+| `GET` | `/api/command?model=name.gguf&context_size=16384&load_mmproj=true` | Safe command preview |
 | `GET` | `/api/metrics` | CPU, RAM, GPU, and VRAM sample |
 | `GET` | `/api/logs` | Recent in-memory llama-server output |
 | `POST` | `/api/logs/clear` | Clear the website console |

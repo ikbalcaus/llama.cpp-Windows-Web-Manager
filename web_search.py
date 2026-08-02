@@ -6,7 +6,6 @@ import io
 import ipaddress
 import json
 import os
-import random
 import socket
 import sys
 from html.parser import HTMLParser
@@ -16,14 +15,18 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
+from dotenv import load_dotenv
 
-DEFAULT_SEARXNG_URL = "auto"
+
+PROJECT_DIR = Path(__file__).resolve().parent
+load_dotenv(PROJECT_DIR / ".env")
+
+DEFAULT_SEARXNG_URL = os.environ["SEARXNG_URL"].strip()
 DEFAULT_MAX_RESULTS = 5
 DEFAULT_TIMEOUT_SECONDS = 15
 DEFAULT_FETCH_MAX_CHARS = 30_000
 DEFAULT_AGENTIC_MAX_TURNS = 15
 MAX_FETCH_BYTES = 2_000_000
-SEARXNG_INSTANCES_URL = "https://searx.space/data/instances.json"
 
 
 def validate_web_search_configuration(
@@ -33,13 +36,10 @@ def validate_web_search_configuration(
     fetch_max_chars: int = DEFAULT_FETCH_MAX_CHARS,
     agentic_max_turns: int = DEFAULT_AGENTIC_MAX_TURNS,
 ) -> None:
-    if searxng_url.lower() == "auto":
-        parsed = None
-    else:
-        parsed = urlparse(searxng_url)
-    if parsed and (parsed.scheme not in {"http", "https"} or not parsed.hostname):
-        raise ValueError("SEARXNG_URL must be 'auto' or a valid http:// or https:// URL")
-    if parsed and (parsed.username or parsed.password or parsed.fragment):
+    parsed = urlparse(searxng_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("SEARXNG_URL must be a valid http:// or https:// URL")
+    if parsed.username or parsed.password or parsed.fragment:
         raise ValueError("SEARXNG_URL cannot contain credentials or a fragment")
     if not 1 <= max_results <= 20:
         raise ValueError("WEB_SEARCH_MAX_RESULTS must be between 1 and 20")
@@ -184,33 +184,6 @@ def _normalize_results(raw_results: Any, max_results: int) -> list[dict[str, Any
     return results
 
 
-def _discover_searxng_instances(timeout_seconds: int) -> list[str]:
-    request = Request(
-        SEARXNG_INSTANCES_URL,
-        headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
-    )
-    with urlopen(request, timeout=timeout_seconds) as response:
-        payload = json.load(response)
-    candidates: list[tuple[float, str]] = []
-    for url, details in payload.get("instances", {}).items():
-        if not isinstance(details, dict):
-            continue
-        search_timing = details.get("timing", {}).get("search", {})
-        if (
-            details.get("main") is True
-            and details.get("network_type") == "normal"
-            and not details.get("error")
-            and details.get("http", {}).get("status_code") == 200
-            and search_timing.get("success_percentage", 0) >= 80
-        ):
-            median = search_timing.get("all", {}).get("median") or 30.0
-            candidates.append((float(median), url))
-    candidates.sort(key=lambda item: item[0])
-    fastest = [url for _, url in candidates[:20]]
-    random.SystemRandom().shuffle(fastest)
-    return fastest
-
-
 def _search_searxng_instance(
     query: str,
     base_url: str,
@@ -281,29 +254,19 @@ def search_searxng(
         raise ValueError("Search query cannot exceed 500 characters")
 
     validate_web_search_configuration(searxng_url, max_results, timeout_seconds)
-    instance_urls: list[str] = []
-    if searxng_url.lower() == "auto":
-        try:
-            instance_urls = _discover_searxng_instances(timeout_seconds)[:4]
-        except (HTTPError, URLError, OSError, json.JSONDecodeError, ValueError):
-            pass
-    else:
-        instance_urls = [searxng_url]
-
-    for instance_url in instance_urls:
-        try:
-            results = _search_searxng_instance(
-                query, instance_url, max_results, min(timeout_seconds, 8)
-            )
-            if results:
-                return {
-                    "query": query,
-                    "provider": "SearXNG",
-                    "instance": instance_url,
-                    "results": results,
-                }
-        except (HTTPError, URLError, OSError, ValueError):
-            continue
+    try:
+        results = _search_searxng_instance(
+            query, searxng_url, max_results, min(timeout_seconds, 8)
+        )
+        if results:
+            return {
+                "query": query,
+                "provider": "SearXNG",
+                "instance": searxng_url,
+                "results": results,
+            }
+    except (HTTPError, URLError, OSError, ValueError):
+        pass
 
     try:
         results = _search_python_fallback(query, max_results, timeout_seconds)

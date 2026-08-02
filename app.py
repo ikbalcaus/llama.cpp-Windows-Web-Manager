@@ -23,6 +23,16 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from web_search import (
+    DEFAULT_AGENTIC_MAX_TURNS,
+    DEFAULT_FETCH_MAX_CHARS,
+    DEFAULT_MAX_RESULTS,
+    DEFAULT_SEARXNG_URL,
+    DEFAULT_TIMEOUT_SECONDS,
+    build_web_search_arguments,
+    validate_web_search_configuration,
+)
+
 
 PROJECT_DIR = Path(__file__).resolve().parent
 load_dotenv(PROJECT_DIR / ".env")
@@ -55,7 +65,6 @@ ENABLE_NGROK = os.environ.get("ENABLE_NGROK", "false").strip().lower() in {
 }
 NGROK_DOMAIN = os.environ.get("NGROK_DOMAIN", "")
 LLAMA_DEFAULT_CONTEXT_SIZE = int(os.environ["LLAMA_DEFAULT_CONTEXT_SIZE"])
-LLAMA_REASONING = os.environ["LLAMA_REASONING"]
 LLAMA_ALIAS = os.environ["LLAMA_ALIAS"]
 LLAMA_MTP_SPEC_TYPE = os.environ["LLAMA_MTP_SPEC_TYPE"]
 LLAMA_MTP_DRAFT_N_MAX = int(os.environ["LLAMA_MTP_DRAFT_N_MAX"])
@@ -65,10 +74,21 @@ LLAMA_NO_MMPROJ_OFFLOAD = (
 WEB_LOG_LINES = int(os.environ["WEB_LOG_LINES"])
 TRAY_ENABLED = os.environ["TRAY_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
 TRAY_TOOLTIP = os.environ["TRAY_TOOLTIP"].strip()
+SEARXNG_URL = os.environ.get("SEARXNG_URL", DEFAULT_SEARXNG_URL).strip()
+WEB_SEARCH_MAX_RESULTS = int(
+    os.environ.get("WEB_SEARCH_MAX_RESULTS", str(DEFAULT_MAX_RESULTS))
+)
+WEB_SEARCH_TIMEOUT = int(
+    os.environ.get("WEB_SEARCH_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS))
+)
+WEB_FETCH_MAX_CHARS = int(
+    os.environ.get("WEB_FETCH_MAX_CHARS", str(DEFAULT_FETCH_MAX_CHARS))
+)
+WEB_SEARCH_MAX_TURNS = int(
+    os.environ.get("WEB_SEARCH_MAX_TURNS", str(DEFAULT_AGENTIC_MAX_TURNS))
+)
 
 ALLOWED_CONTEXT_SIZES = (16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024)
-
-
 class ForwardedPrefixMiddleware:
     """Apply Caddy's trusted prefix so Flask generates prefix-aware URLs."""
 
@@ -110,6 +130,14 @@ def validate_load_mmproj(value: Any) -> bool:
     return value
 
 
+def validate_web_search(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, bool):
+        raise ValueError("web_search must be a boolean")
+    return value
+
+
 class LlamaServerManager:
     def __init__(self, executable: Path, models_dir: Path) -> None:
         self.executable = executable
@@ -118,6 +146,7 @@ class LlamaServerManager:
         self._selected_model: str | None = None
         self._context_size: int | None = None
         self._load_mmproj: bool | None = None
+        self._web_search: bool | None = None
         self._started_at: str | None = None
         self._logs: deque[dict[str, str]] = deque(maxlen=WEB_LOG_LINES)
         self._lock = threading.RLock()
@@ -160,10 +189,12 @@ class LlamaServerManager:
         filename: Any,
         context_size: Any = None,
         load_mmproj: Any = None,
+        web_search: Any = None,
     ) -> list[str]:
         model_path = self._validated_model_path(filename)
         selected_context_size = validate_context_size(context_size)
         should_load_mmproj = validate_load_mmproj(load_mmproj)
+        should_enable_web_search = validate_web_search(web_search)
         if not self.executable.is_file():
             raise FileNotFoundError(f"llama-server executable not found: {self.executable}")
         command = [
@@ -180,13 +211,22 @@ class LlamaServerManager:
             [
                 "-c",
                 str(selected_context_size),
-                "--reasoning",
-                LLAMA_REASONING,
-                "--alias",
-                LLAMA_ALIAS,
             ]
         )
+        command.extend(["--reasoning", "off", "--reasoning-budget", "0"])
+        command.extend(["--alias", LLAMA_ALIAS])
         command.extend(["--host", LLAMA_HOST, "--port", str(LLAMA_PORT)])
+        web_search_arguments = build_web_search_arguments(
+            should_enable_web_search,
+            SEARXNG_URL,
+            WEB_SEARCH_MAX_RESULTS,
+            WEB_SEARCH_TIMEOUT,
+            WEB_FETCH_MAX_CHARS,
+            WEB_SEARCH_MAX_TURNS,
+        )
+        if "--jinja" in command and web_search_arguments[:1] == ["--jinja"]:
+            web_search_arguments = web_search_arguments[1:]
+        command.extend(web_search_arguments)
         if "mtp" in model_path.name.lower():
             command.extend(
                 [
@@ -242,6 +282,13 @@ class LlamaServerManager:
             return None
         return "--mmproj" in arguments
 
+    def _web_search_from_process(self, process: psutil.Process) -> bool | None:
+        try:
+            arguments = process.cmdline()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            return None
+        return "--mcp-servers-json" in arguments
+
     def _append_log(self, source: str, message: str) -> None:
         cleaned = message.rstrip("\r\n")
         if not cleaned:
@@ -278,12 +325,14 @@ class LlamaServerManager:
                 self._process = None
                 self._context_size = None
                 self._load_mmproj = None
+                self._web_search = None
                 return {
                     "running": False,
                     "pid": None,
                     "selected_model": self._selected_model,
                     "context_size": None,
                     "load_mmproj": None,
+                    "web_search": None,
                     "started_at": self._started_at,
                     "process_count": 0,
                     "owned": False,
@@ -300,12 +349,18 @@ class LlamaServerManager:
                 if owned
                 else self._load_mmproj_from_process(process)
             )
+            web_search = (
+                self._web_search
+                if owned
+                else self._web_search_from_process(process)
+            )
             return {
                 "running": True,
                 "pid": process.pid,
                 "selected_model": selected,
                 "context_size": context_size,
                 "load_mmproj": load_mmproj,
+                "web_search": web_search,
                 "started_at": self._started_at if owned else None,
                 "process_count": len(matches),
                 "owned": owned,
@@ -316,14 +371,17 @@ class LlamaServerManager:
         filename: Any,
         context_size: Any = None,
         load_mmproj: Any = None,
+        web_search: Any = None,
     ) -> dict[str, Any]:
         with self._lock:
             selected_context_size = validate_context_size(context_size)
             selected_load_mmproj = validate_load_mmproj(load_mmproj)
+            selected_web_search = validate_web_search(web_search)
             command = self.build_command(
                 filename,
                 selected_context_size,
                 selected_load_mmproj,
+                selected_web_search,
             )
             matches = self._matching_processes()
             if matches:
@@ -354,6 +412,7 @@ class LlamaServerManager:
             self._selected_model = Path(str(filename)).name
             self._context_size = selected_context_size
             self._load_mmproj = selected_load_mmproj
+            self._web_search = selected_web_search
             self._started_at = utc_now()
             threading.Thread(
                 target=self._capture_output,
@@ -392,6 +451,7 @@ class LlamaServerManager:
                 self._selected_model = None
                 self._context_size = None
                 self._load_mmproj = None
+                self._web_search = None
                 self._started_at = None
                 return self.status()
             for process in matches:
@@ -400,6 +460,7 @@ class LlamaServerManager:
             self._selected_model = None
             self._context_size = None
             self._load_mmproj = None
+            self._web_search = None
             self._started_at = None
             return self.status()
 
@@ -408,6 +469,7 @@ class LlamaServerManager:
         filename: Any | None,
         context_size: Any = None,
         load_mmproj: Any = None,
+        web_search: Any = None,
     ) -> dict[str, Any]:
         with self._lock:
             selected = filename or self.status().get("selected_model")
@@ -415,16 +477,17 @@ class LlamaServerManager:
                 raise ValueError("select a model before restarting")
             self._validated_model_path(selected)
             self.stop()
-            return self.start(selected, context_size, load_mmproj)
+            return self.start(selected, context_size, load_mmproj, web_search)
 
     def command_preview(
         self,
         filename: Any,
         context_size: Any = None,
         load_mmproj: Any = None,
+        web_search: Any = None,
     ) -> str:
         return subprocess.list2cmdline(
-            self.build_command(filename, context_size, load_mmproj)
+            self.build_command(filename, context_size, load_mmproj, web_search)
         )
 
     def logs(self, limit: int = 120) -> list[dict[str, str]]:
@@ -718,6 +781,7 @@ def api_start() -> tuple[Response, int] | Response:
             payload.get("model"),
             payload.get("context_size"),
             payload.get("load_mmproj"),
+            payload.get("web_search"),
         )
         return jsonify(status)
     except (ValueError, FileNotFoundError) as exc:
@@ -739,6 +803,7 @@ def api_restart() -> tuple[Response, int] | Response:
             payload.get("model"),
             payload.get("context_size"),
             payload.get("load_mmproj"),
+            payload.get("web_search"),
         )
         return jsonify(status)
     except (ValueError, FileNotFoundError) as exc:
@@ -774,6 +839,7 @@ def api_command() -> tuple[Response, int] | Response:
     try:
         raw_context_size = request.args.get("context_size")
         raw_load_mmproj = request.args.get("load_mmproj")
+        raw_web_search = request.args.get("web_search")
         context_size: Any = None
         if raw_context_size is not None:
             context_size = (
@@ -790,12 +856,22 @@ def api_command() -> tuple[Response, int] | Response:
                 load_mmproj = False
             else:
                 load_mmproj = raw_load_mmproj
+        web_search: Any = None
+        if raw_web_search is not None:
+            lowered = raw_web_search.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                web_search = True
+            elif lowered in {"0", "false", "no", "off"}:
+                web_search = False
+            else:
+                web_search = raw_web_search
         return jsonify(
             {
                 "command": manager.command_preview(
                     request.args.get("model"),
                     context_size,
                     load_mmproj,
+                    web_search,
                 )
             }
         )
@@ -833,6 +909,13 @@ def resolve_ngrok_path() -> Path:
 
 def validate_configuration() -> None:
     validate_context_size(LLAMA_DEFAULT_CONTEXT_SIZE)
+    validate_web_search_configuration(
+        SEARXNG_URL,
+        WEB_SEARCH_MAX_RESULTS,
+        WEB_SEARCH_TIMEOUT,
+        WEB_FETCH_MAX_CHARS,
+        WEB_SEARCH_MAX_TURNS,
+    )
     for name, port in (
         ("LLAMA_PORT", LLAMA_PORT),
         ("FLASK_PORT", FLASK_PORT),

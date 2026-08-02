@@ -294,6 +294,15 @@ h1 {
   gap: 8px;
 }
 
+.feature-toggles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 5px;
+  margin-right: 4px;
+}
+
 .mmproj-toggle {
   position: relative;
   display: inline-flex;
@@ -307,7 +316,13 @@ h1 {
   cursor: pointer;
   -webkit-user-select: none;
   user-select: none;
-  margin-right: 10px;
+  margin-right: 2px;
+}
+
+.feature-toggles .mmproj-toggle {
+  width: 100%;
+  justify-content: flex-end;
+  margin-right: 0;
 }
 
 .mmproj-toggle input {
@@ -556,7 +571,7 @@ h1 {
 
   .model-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: auto repeat(2, minmax(0, 1fr));
     width: 100%;
   }
 
@@ -571,8 +586,12 @@ h1 {
   }
 
   .mmproj-toggle {
-    min-height: 44px;
+    min-height: 20px;
     padding-right: 2px;
+  }
+
+  .feature-toggles {
+    min-height: 44px;
   }
 
   .model-details span {

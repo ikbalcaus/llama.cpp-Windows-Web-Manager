@@ -31,6 +31,7 @@ let latestStatus = {
   running: false,
   selected_model: null,
   load_mmproj: null,
+  web_search: null,
 };
 let busy = false;
 let logsPointerActive = false;
@@ -89,6 +90,9 @@ function updateControls() {
   document.querySelectorAll("[data-load-mmproj]").forEach((checkbox) => {
     checkbox.disabled = busy;
   });
+  document.querySelectorAll("[data-web-search]").forEach((checkbox) => {
+    checkbox.disabled = busy;
+  });
   document.querySelectorAll(".model-card").forEach((card) => {
     card.classList.toggle("loaded", isLoaded(card.dataset.model));
   });
@@ -115,6 +119,23 @@ function syncMmprojControls() {
   });
 }
 
+function syncWebSearchControls() {
+  if (
+    !latestStatus.running
+    || typeof latestStatus.web_search !== "boolean"
+  ) {
+    return;
+  }
+  document.querySelectorAll("[data-web-search]").forEach((checkbox) => {
+    if (
+      checkbox.dataset.webSearch === latestStatus.selected_model
+      && checkbox.dataset.userModified !== "true"
+    ) {
+      checkbox.checked = latestStatus.web_search;
+    }
+  });
+}
+
 function syncContextSizeSlider() {
   if (
     !latestStatus.running
@@ -136,6 +157,7 @@ function renderStatus(status) {
   syncContextSizeSlider();
   updateContextSizeOutput();
   syncMmprojControls();
+  syncWebSearchControls();
   updateControls();
 }
 
@@ -176,6 +198,9 @@ function renderModels() {
 
     const actions = document.createElement("div");
     actions.className = "model-actions";
+    const featureToggles = document.createElement("div");
+    featureToggles.className = "feature-toggles";
+    actions.append(featureToggles);
 
     let mmprojToggle = null;
     if (model.has_mmproj) {
@@ -207,8 +232,37 @@ function renderModels() {
       switchLabel.textContent = "MMPROJ";
       mmprojControl.title = "Load MMPROJ";
       mmprojControl.append(mmprojToggle, switchLabel, switchTrack);
-      actions.append(mmprojControl);
+      featureToggles.append(mmprojControl);
     }
+
+    const webSearchControl = document.createElement("label");
+    webSearchControl.className = "mmproj-toggle web-search-toggle";
+    const webSearchToggle = document.createElement("input");
+    webSearchToggle.type = "checkbox";
+    webSearchToggle.checked = (
+      isLoaded(model.filename)
+      && typeof latestStatus.web_search === "boolean"
+    )
+      ? latestStatus.web_search
+      : true;
+    webSearchToggle.dataset.webSearch = model.filename;
+    webSearchToggle.dataset.userModified = "false";
+    webSearchToggle.addEventListener("change", () => {
+      webSearchToggle.dataset.userModified = "true";
+    });
+    webSearchToggle.setAttribute(
+      "aria-label",
+      `Enable Web Search for ${model.name}`,
+    );
+    const webSearchTrack = document.createElement("span");
+    webSearchTrack.className = "switch-track";
+    webSearchTrack.setAttribute("aria-hidden", "true");
+    const webSearchLabel = document.createElement("span");
+    webSearchLabel.className = "switch-label";
+    webSearchLabel.textContent = "WEB SEARCH";
+    webSearchControl.title = "Enable Web Search";
+    webSearchControl.append(webSearchToggle, webSearchLabel, webSearchTrack);
+    featureToggles.append(webSearchControl);
 
     const unload = document.createElement("button");
     unload.type = "button";
@@ -231,6 +285,7 @@ function renderModels() {
           model: model.filename,
           context_size: contextSizes[Number(contextSizeSlider.value)],
           load_mmproj: mmprojToggle ? mmprojToggle.checked : false,
+          web_search: webSearchToggle.checked,
         },
         "",
       );

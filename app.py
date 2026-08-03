@@ -216,6 +216,15 @@ class LlamaServerManager:
         command.extend(["--reasoning", "off", "--reasoning-budget", "0"])
         command.extend(["--alias", LLAMA_ALIAS])
         command.extend(["--host", LLAMA_HOST, "--port", str(LLAMA_PORT)])
+        if "mtp" in model_path.name.lower():
+            command.extend(
+                [
+                    "--spec-type",
+                    LLAMA_MTP_SPEC_TYPE,
+                    "--spec-draft-n-max",
+                    str(LLAMA_MTP_DRAFT_N_MAX),
+                ]
+            )
         web_search_arguments = build_web_search_arguments(
             should_enable_web_search,
             SEARXNG_URL,
@@ -227,15 +236,6 @@ class LlamaServerManager:
         if "--jinja" in command and web_search_arguments[:1] == ["--jinja"]:
             web_search_arguments = web_search_arguments[1:]
         command.extend(web_search_arguments)
-        if "mtp" in model_path.name.lower():
-            command.extend(
-                [
-                    "--spec-type",
-                    LLAMA_MTP_SPEC_TYPE,
-                    "--spec-draft-n-max",
-                    str(LLAMA_MTP_DRAFT_N_MAX),
-                ]
-            )
         return command
 
     def _matching_processes(self) -> list[psutil.Process]:

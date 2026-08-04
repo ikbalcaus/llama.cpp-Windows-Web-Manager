@@ -25,6 +25,17 @@ const chartPaths = {
 
 const metricHistory = [];
 const maxHistoryPoints = 30;
+const metricHistoryStorageKey = "llama-manager.metric-history.v1";
+const persistedMetricKeys = [
+  "cpu_percent",
+  "ram_percent",
+  "gpu_percent",
+  "vram_percent",
+  "ram_used_bytes",
+  "ram_total_bytes",
+  "vram_used_bytes",
+  "vram_total_bytes",
+];
 const contextSizes = [16384, 32768, 65536, 131072];
 let models = [];
 let latestStatus = {
@@ -328,6 +339,43 @@ function valueLabel(value) {
   return value === null || value === undefined ? "N/A" : `${value.toFixed(1)}%`;
 }
 
+function normalizeMetricSample(sample) {
+  const normalized = {};
+  persistedMetricKeys.forEach((key) => {
+    const value = sample && sample[key];
+    normalized[key] = typeof value === "number" && Number.isFinite(value)
+      ? value
+      : null;
+  });
+  return normalized;
+}
+
+function restoreMetricHistory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(metricHistoryStorageKey) || "[]");
+    if (!Array.isArray(saved)) return;
+    saved.slice(-maxHistoryPoints).forEach((sample) => {
+      if (sample && typeof sample === "object" && !Array.isArray(sample)) {
+        metricHistory.push(normalizeMetricSample(sample));
+      }
+    });
+  } catch (error) {
+    try {
+      localStorage.removeItem(metricHistoryStorageKey);
+    } catch (storageError) {
+      // Ignore browsers that disable localStorage entirely.
+    }
+  }
+}
+
+function persistMetricHistory() {
+  try {
+    localStorage.setItem(metricHistoryStorageKey, JSON.stringify(metricHistory));
+  } catch (error) {
+    // Monitoring continues in memory if browser storage is unavailable.
+  }
+}
+
 function pathForMetric(key) {
   const left = 12;
   const right = 446;
@@ -351,9 +399,9 @@ function pathForMetric(key) {
   return path;
 }
 
-function renderMetrics(sample) {
-  metricHistory.push(sample);
-  if (metricHistory.length > maxHistoryPoints) metricHistory.shift();
+function renderMetricHistory() {
+  const sample = metricHistory[metricHistory.length - 1];
+  if (!sample) return;
   Object.keys(metricNodes).forEach((key) => {
     metricNodes[key].textContent = valueLabel(sample[key]);
     chartPaths[key].setAttribute("d", pathForMetric(key));
@@ -366,6 +414,13 @@ function renderMetrics(sample) {
     : valueLabel(sample.vram_percent);
   metricNodes.ram_percent.textContent = ramDetail;
   metricNodes.vram_percent.textContent = vramDetail;
+}
+
+function renderMetrics(sample) {
+  metricHistory.push(normalizeMetricSample(sample));
+  if (metricHistory.length > maxHistoryPoints) metricHistory.shift();
+  persistMetricHistory();
+  renderMetricHistory();
 }
 
 async function loadMetrics() {
@@ -466,6 +521,11 @@ document.getElementById("refresh-button").addEventListener("click", async () => 
 });
 document.getElementById("clear-graphs-button").addEventListener("click", () => {
   metricHistory.length = 0;
+  try {
+    localStorage.removeItem(metricHistoryStorageKey);
+  } catch (error) {
+    // The in-memory history is still cleared when storage is unavailable.
+  }
   Object.values(chartPaths).forEach((path) => path.setAttribute("d", ""));
   Object.values(metricNodes).forEach((node) => {
     node.textContent = "—";
@@ -480,6 +540,8 @@ document.getElementById("clear-logs-button").addEventListener("click", async () 
   }
 });
 
+restoreMetricHistory();
+renderMetricHistory();
 Promise.all([loadModels(), loadStatus(), loadMetrics(), loadLogs()]);
 window.setInterval(loadStatus, 3000);
 window.setInterval(loadMetrics, 1100);

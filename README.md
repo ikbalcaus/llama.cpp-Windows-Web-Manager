@@ -95,7 +95,8 @@ frontend\
   favicon.svg
   favicon-dark.svg
 models\
-  model-name.gguf
+  model-name-q4.gguf
+  model-name-mtp.gguf
   model-name-mmproj.gguf
 ```
 
@@ -107,6 +108,17 @@ remove both the internal `-mtp` marker and any `-q<number>` quantization token,
 while the original filename remains available for applying MTP launch options.
 The quantization is shown separately in the model list, in uppercase, after the
 file size (for example `model-name-q4-mtp.gguf · 21.11 GB · Q4`).
+
+MTP can come from two sources. When the main GGUF itself contains the MTP head
+and no matching draft exists (a name like `model-name-q4-mtp.gguf` on its own),
+the manager launches it with `--spec-type draft-mtp --spec-draft-n-max`. When
+MTP is separated into its own file, the draft shares the same base name as the
+main model but without the quantization token, for example main
+`model-name-q4.gguf` paired with `model-name-mtp.gguf`. Because they share the
+same base name, the `-mtp` file is recognized as a draft, hidden from the model
+list, and the main card launches with `--model-draft model-name-mtp.gguf`
+followed by the same `--spec-type` flags. In both cases the model card shows the
+`MTP` feature badge.
 
 ## Configuration
 

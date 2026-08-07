@@ -171,6 +171,13 @@ class LlamaServerManager:
         )
 
     @classmethod
+    def _mtp_draft_path_for(cls, model_path: Path) -> Path | None:
+        if "mtp" in model_path.name.lower():
+            return None
+        draft = model_path.with_name(f"{cls._mmproj_stem(model_path.stem)}-mtp.gguf")
+        return draft if draft.is_file() else None
+
+    @classmethod
     def _display_name(cls, stem: str, quantization: str | None) -> str:
         parts = [
             token
@@ -184,12 +191,21 @@ class LlamaServerManager:
     def scan_models(self) -> list[dict[str, Any]]:
         self.models_dir.mkdir(parents=True, exist_ok=True)
         models: list[dict[str, Any]] = []
-        for path in sorted(self.models_dir.glob("*.gguf"), key=lambda item: item.name.lower()):
-            if not path.is_file() or "mmproj" in path.name.lower():
+        paths = [p for p in self.models_dir.glob("*.gguf") if p.is_file()]
+        draft_names = {
+            draft.name
+            for path in paths
+            if "mmproj" not in path.name.lower() and "mtp" not in path.name.lower()
+            for draft in [path.with_name(f"{self._mmproj_stem(path.stem)}-mtp.gguf")]
+            if draft.is_file()
+        }
+        for path in sorted(paths, key=lambda item: item.name.lower()):
+            if "mmproj" in path.name.lower() or path.name in draft_names:
                 continue
             mmproj_path = path.with_name(f"{self._mmproj_stem(path.stem)}-mmproj.gguf")
             quantization = self._extract_quantization(path.stem)
             display_name = self._display_name(path.stem, quantization)
+            mtp_draft = self._mtp_draft_path_for(path)
             models.append(
                 {
                     "name": display_name,
@@ -197,7 +213,8 @@ class LlamaServerManager:
                     "size_bytes": path.stat().st_size,
                     "quantization": quantization,
                     "has_mmproj": mmproj_path.is_file(),
-                    "uses_mtp": "mtp" in path.name.lower(),
+                    "uses_mtp": "mtp" in path.name.lower() or mtp_draft is not None,
+                    "mtp_draft": mtp_draft.name if mtp_draft else None,
                 }
             )
         return models
@@ -247,7 +264,10 @@ class LlamaServerManager:
         command.extend(["--reasoning", "off", "--reasoning-budget", "0"])
         command.extend(["--alias", LLAMA_ALIAS])
         command.extend(["--host", LLAMA_HOST, "--port", str(LLAMA_PORT)])
-        if "mtp" in model_path.name.lower():
+        mtp_draft_path = self._mtp_draft_path_for(model_path)
+        if mtp_draft_path is not None:
+            command.extend(["--model-draft", str(mtp_draft_path)])
+        if "mtp" in model_path.name.lower() or mtp_draft_path is not None:
             command.extend(
                 [
                     "--spec-type",

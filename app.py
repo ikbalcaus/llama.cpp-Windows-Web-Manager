@@ -73,6 +73,7 @@ LLAMA_NO_MMPROJ_OFFLOAD = (
 )
 WEB_LOG_LINES = int(os.environ["WEB_LOG_LINES"])
 TRAY_ENABLED = os.environ["TRAY_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
+QUANTIZATION_RE = re.compile(r"(?i)^q[0-9]+$")
 TRAY_TOOLTIP = os.environ["TRAY_TOOLTIP"].strip()
 SEARXNG_URL = os.environ.get("SEARXNG_URL", DEFAULT_SEARXNG_URL).strip()
 WEB_SEARCH_MAX_RESULTS = int(
@@ -151,6 +152,24 @@ class LlamaServerManager:
         self._logs: deque[dict[str, str]] = deque(maxlen=WEB_LOG_LINES)
         self._lock = threading.RLock()
 
+    @staticmethod
+    def _extract_quantization(stem: str) -> str | None:
+        for token in reversed(stem.split("-")):
+            if QUANTIZATION_RE.fullmatch(token):
+                return token
+        return None
+
+    @classmethod
+    def _display_name(cls, stem: str, quantization: str | None) -> str:
+        parts = [
+            token
+            for token in stem.split("-")
+            if token.lower() != "mtp"
+            and (quantization is None or token.lower() != quantization.lower())
+        ]
+        name = "-".join(parts)
+        return name[:1].upper() + name[1:]
+
     def scan_models(self) -> list[dict[str, Any]]:
         self.models_dir.mkdir(parents=True, exist_ok=True)
         models: list[dict[str, Any]] = []
@@ -158,13 +177,14 @@ class LlamaServerManager:
             if not path.is_file() or "mmproj" in path.name.lower():
                 continue
             mmproj_path = path.with_name(f"{path.stem}-mmproj.gguf")
-            display_name = re.sub(r"-mtp", "", path.stem, flags=re.IGNORECASE)
-            display_name = display_name[:1].upper() + display_name[1:]
+            quantization = self._extract_quantization(path.stem)
+            display_name = self._display_name(path.stem, quantization)
             models.append(
                 {
                     "name": display_name,
                     "filename": path.name,
                     "size_bytes": path.stat().st_size,
+                    "quantization": quantization,
                     "has_mmproj": mmproj_path.is_file(),
                     "uses_mtp": "mtp" in path.name.lower(),
                 }

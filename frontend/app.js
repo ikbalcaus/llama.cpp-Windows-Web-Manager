@@ -203,8 +203,9 @@ function renderModels() {
     const features = [];
     if (model.has_mmproj) features.push("vision");
     if (model.uses_mtp) features.push("MTP");
+    const quant = model.quantization ? ` · ${model.quantization.toUpperCase()}` : "";
     const suffix = features.length ? ` · ${features.join(" · ")}` : "";
-    meta.textContent = `${model.filename} · ${formatBytes(model.size_bytes)}${suffix}`;
+    meta.textContent = `${model.filename} · ${formatBytes(model.size_bytes)}${quant}${suffix}`;
     details.append(name, meta);
 
     const actions = document.createElement("div");

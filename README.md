@@ -100,9 +100,13 @@ models\
 ```
 
 Files containing `mmproj` are hidden from the model list. A matching projection
-file is attached automatically. Display names remove the internal `-mtp`
-marker, while the original filename remains available for applying MTP launch
-options.
+file is attached automatically. The mmproj filename is derived from the model
+without the quantization token, so a model named
+`model-name-q4-mtp.gguf` looks for `model-name-mtp-mmproj.gguf`. Display names
+remove both the internal `-mtp` marker and any `-q<number>` quantization token,
+while the original filename remains available for applying MTP launch options.
+The quantization is shown separately in the model list, in uppercase, after the
+file size (for example `model-name-q4-mtp.gguf · 21.11 GB · Q4`).
 
 ## Configuration
 

@@ -159,6 +159,17 @@ class LlamaServerManager:
                 return token
         return None
 
+    @staticmethod
+    def _mmproj_stem(stem: str) -> str:
+        quantization = LlamaServerManager._extract_quantization(stem)
+        if quantization is None:
+            return stem
+        return "-".join(
+            token
+            for token in stem.split("-")
+            if token.lower() != quantization.lower()
+        )
+
     @classmethod
     def _display_name(cls, stem: str, quantization: str | None) -> str:
         parts = [
@@ -176,7 +187,7 @@ class LlamaServerManager:
         for path in sorted(self.models_dir.glob("*.gguf"), key=lambda item: item.name.lower()):
             if not path.is_file() or "mmproj" in path.name.lower():
                 continue
-            mmproj_path = path.with_name(f"{path.stem}-mmproj.gguf")
+            mmproj_path = path.with_name(f"{self._mmproj_stem(path.stem)}-mmproj.gguf")
             quantization = self._extract_quantization(path.stem)
             display_name = self._display_name(path.stem, quantization)
             models.append(
@@ -222,7 +233,7 @@ class LlamaServerManager:
             "-m",
             str(model_path),
         ]
-        mmproj_path = model_path.with_name(f"{model_path.stem}-mmproj.gguf")
+        mmproj_path = model_path.with_name(f"{self._mmproj_stem(model_path.stem)}-mmproj.gguf")
         if should_load_mmproj and mmproj_path.is_file():
             command.extend(["--mmproj", str(mmproj_path)])
             if LLAMA_NO_MMPROJ_OFFLOAD:

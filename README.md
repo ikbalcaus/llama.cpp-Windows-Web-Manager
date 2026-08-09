@@ -7,13 +7,14 @@ The complete runtime now lives in `app.py`. Running it starts:
 - llama.cpp models on `0.0.0.0:8080` when loaded from the UI
 - Flask/Waitress on `0.0.0.0:8081`
 - Caddy on `0.0.0.0:8082`
-- ngrok forwarding the reserved domain to Caddy only when `ENABLE_NGROK=true`
+- Cloudflare Tunnel (`cloudflared`) forwarding your public hostname to Caddy
+  only when `ENABLE_CLOUDFLARE_TUNNEL=true`
 
-When ngrok is enabled, the public routes are:
+When Cloudflare Tunnel is enabled, the public routes are:
 
 ```text
-{NGROK_DOMAIN}/8080/  -> llama.cpp
-{NGROK_DOMAIN}/8081/  -> management UI
+{CLOUDFLARE_TUNNEL_URL}/8080/  -> llama.cpp
+{CLOUDFLARE_TUNNEL_URL}/8081/  -> management UI
 ```
 
 ## Windows setup
@@ -34,20 +35,28 @@ python -m pip install -r .\requirements.txt
 ```
 
 The checked-in `.env` contains the current local paths, ports, model options,
-and optional ngrok settings. Ngrok is disabled by default:
+and optional Cloudflare Tunnel settings. The tunnel is disabled by default:
 
 ```dotenv
-ENABLE_NGROK=false
+ENABLE_CLOUDFLARE_TUNNEL=false
 ```
 
-Set it to `true` to enable the tunnel. If ngrok is not already authenticated
-through its normal configuration, add this locally:
+To expose your localhost publicly for free, create a tunnel in the Cloudflare
+Zero Trust dashboard (<https://one.dash.cloudflare.com> → Networks →
+Tunnels). On the tunnel's overview page choose **Add a replica** to reveal the
+installation command and copy the `eyJ...` token. Configure the tunnel's
+public hostname to point to `http://localhost:{CADDY_PORT}` (8082 by default).
+Then set these locally:
 
 ```dotenv
-NGROK_AUTHTOKEN=your_real_agent_token
+ENABLE_CLOUDFLARE_TUNNEL=true
+CLOUDFLARE_TUNNEL_URL=https://your-hostname.example.com
+CLOUDFLARE_TUNNEL_TOKEN=your_eyJ_token
 ```
 
-Never publish that token.
+`cloudflared.exe` is resolved from `CLOUDFLARE_TUNNEL_PATH`, the project
+directory, or `PATH`. The token is passed to `cloudflared` through the
+`TUNNEL_TOKEN` environment variable and never appears in its command line.
 
 Start the entire stack with one command:
 
@@ -58,7 +67,7 @@ Start the entire stack with one command:
 On Windows this starts the notification-area icon. Double-click it to open the
 settings page. A single left-click does nothing. Right-click it to open Settings,
 open the llama.cpp UI, or choose **Exit**. Exit cleanly stops Flask, Caddy,
-ngrok when enabled, and any llama-server process loaded by the UI.
+Cloudflare Tunnel when enabled, and any llama-server process loaded by the UI.
 
 To start minimized without a PowerShell window, use:
 
@@ -77,7 +86,8 @@ For console-only operation without a tray icon, use:
 ```
 
 In console-only mode, `Ctrl+C` performs the same clean shutdown.
-Child executables use `CREATE_NO_WINDOW`. Caddy and enabled ngrok output is discarded;
+Child executables use `CREATE_NO_WINDOW`. Caddy and enabled Cloudflare Tunnel
+output is discarded;
 llama-server output is kept only in bounded memory for the website console. It
 is never printed by `app.py` and is never written to a log file. The three
 startup URL announcements are printed only when a console is present.
@@ -125,13 +135,15 @@ followed by the same `--spec-type` flags. In both cases the model card shows the
 `app.py` loads these values from `.env`:
 
 - frontend and model directories
-- llama-server, Caddy, and Caddyfile paths; the ngrok path only when enabled
+- llama-server, Caddy, and Caddyfile paths; the Cloudflare Tunnel path only
+  when enabled
 - llama.cpp, Flask, and Caddy hosts/ports
 - default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`), reasoning, alias, mmproj,
   and MTP options
 - maximum in-memory website console lines (`WEB_LOG_LINES`)
 - tray enablement and tooltip (`TRAY_ENABLED`, `TRAY_TOOLTIP`)
-- ngrok enablement (`ENABLE_NGROK`), domain, and optional `NGROK_AUTHTOKEN`
+- Cloudflare Tunnel enablement (`ENABLE_CLOUDFLARE_TUNNEL`), public URL
+  (`CLOUDFLARE_TUNNEL_URL`), and secret token (`CLOUDFLARE_TUNNEL_TOKEN`)
 
 Caddy also reads the host and port variables from the environment passed by
 `app.py`.

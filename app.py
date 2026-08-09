@@ -57,13 +57,11 @@ LLAMA_PORT = int(os.environ["LLAMA_PORT"])
 FLASK_HOST = os.environ["FLASK_HOST"]
 FLASK_PORT = int(os.environ["FLASK_PORT"])
 CADDY_PORT = int(os.environ["CADDY_PORT"])
-ENABLE_NGROK = os.environ.get("ENABLE_NGROK", "false").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-NGROK_DOMAIN = os.environ.get("NGROK_DOMAIN", "")
+ENABLE_CLOUDFLARE_TUNNEL = os.environ.get(
+    "ENABLE_CLOUDFLARE_TUNNEL", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+CLOUDFLARE_TUNNEL_TOKEN = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "").strip()
+CLOUDFLARE_TUNNEL_URL = os.environ.get("CLOUDFLARE_TUNNEL_URL", "").strip()
 LLAMA_DEFAULT_CONTEXT_SIZE = int(os.environ["LLAMA_DEFAULT_CONTEXT_SIZE"])
 LLAMA_ALIAS = os.environ["LLAMA_ALIAS"]
 LLAMA_MTP_SPEC_TYPE = os.environ["LLAMA_MTP_SPEC_TYPE"]
@@ -947,15 +945,31 @@ def unhandled_error(exc: Exception) -> tuple[Response, int]:
     return jsonify({"error": "internal server error"}), 500
 
 
-def resolve_ngrok_path() -> Path:
-    override = os.environ.get("NGROK_PATH", "").strip()
+def resolve_cloudflared_path() -> Path:
+    override = os.environ.get("CLOUDFLARE_TUNNEL_PATH", "").strip()
     if override:
         return Path(override).expanduser().resolve()
-    local_path = (PROJECT_DIR / "ngrok.exe").resolve()
+    local_path = (PROJECT_DIR / "cloudflared.exe").resolve()
     if local_path.is_file():
         return local_path
-    discovered = shutil.which("ngrok")
+    discovered = shutil.which("cloudflared")
     return Path(discovered).resolve() if discovered else local_path
+
+
+def validate_public_url(value: str, name: str) -> str:
+    hostname = value.strip().split("://", 1)[-1].split("/", 1)[0]
+    labels = hostname.lower().split(".")
+    if (
+        not labels
+        or any(not label or len(label) > 63 for label in labels)
+        or any(label.startswith("-") or label.endswith("-") for label in labels)
+        or any(
+            not all(character.isalnum() or character == "-" for character in label)
+            for label in labels
+        )
+    ):
+        raise ValueError(f"{name} must be a valid public URL")
+    return hostname
 
 
 def validate_configuration() -> None:
@@ -974,25 +988,17 @@ def validate_configuration() -> None:
     ):
         if not 1 <= port <= 65535:
             raise ValueError(f"{name} must be between 1 and 65535")
-    if ENABLE_NGROK:
-        labels = NGROK_DOMAIN.strip().lower().split(".")
-        if (
-            not labels
-            or any(not label or len(label) > 63 for label in labels)
-            or any(label.startswith("-") or label.endswith("-") for label in labels)
-            or any(
-                not all(character.isalnum() or character == "-" for character in label)
-                for label in labels
-            )
-        ):
-            raise ValueError("NGROK_DOMAIN must be a valid hostname")
+    if ENABLE_CLOUDFLARE_TUNNEL:
+        validate_public_url(CLOUDFLARE_TUNNEL_URL, "CLOUDFLARE_TUNNEL_URL")
+        if not CLOUDFLARE_TUNNEL_TOKEN:
+            raise ValueError("CLOUDFLARE_TUNNEL_TOKEN must be set when the tunnel is enabled")
     required = {
         "LLAMA_SERVER_PATH": LLAMA_SERVER_PATH,
         "CADDY_PATH": CADDY_PATH,
         "CADDYFILE_PATH": CADDYFILE_PATH,
     }
-    if ENABLE_NGROK:
-        required["NGROK_PATH"] = resolve_ngrok_path()
+    if ENABLE_CLOUDFLARE_TUNNEL:
+        required["CLOUDFLARE_TUNNEL_PATH"] = resolve_cloudflared_path()
     missing = [
         f"{name}={path}"
         for name, path in required.items()
@@ -1134,8 +1140,8 @@ def add_startup_messages() -> None:
         ),
         f'Caddy started on "{local_base}:{CADDY_PORT}"',
     ]
-    if ENABLE_NGROK:
-        public_base = f"https://{NGROK_DOMAIN}"
+    if ENABLE_CLOUDFLARE_TUNNEL:
+        public_base = CLOUDFLARE_TUNNEL_URL.rstrip("/")
         messages = [
             (
                 f"llama.cpp UI started on \"{local_base}:{LLAMA_PORT}\" "
@@ -1226,14 +1232,13 @@ def build_service_processes() -> list[ServiceProcess]:
             ]
         )
     ]
-    if ENABLE_NGROK:
+    if ENABLE_CLOUDFLARE_TUNNEL:
         services.append(
             ServiceProcess(
                 [
-                    str(resolve_ngrok_path()),
-                    "http",
-                    str(CADDY_PORT),
-                    f"--url={NGROK_DOMAIN}",
+                    str(resolve_cloudflared_path()),
+                    "tunnel",
+                    "run",
                 ]
             )
         )
@@ -1245,6 +1250,8 @@ def run() -> int:
 
     validate_configuration()
     environment = os.environ.copy()
+    if ENABLE_CLOUDFLARE_TUNNEL:
+        environment["TUNNEL_TOKEN"] = CLOUDFLARE_TUNNEL_TOKEN
     services = build_service_processes()
     for service in services:
         service.stop_existing()

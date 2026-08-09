@@ -139,7 +139,7 @@ followed by the same `--spec-type` flags. In both cases the model card shows the
   when enabled
 - llama.cpp, Flask, and Caddy hosts/ports
 - default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`), reasoning, alias, mmproj,
-  and MTP options
+  cache reuse (`LLAMA_CACHE_REUSE`), and MTP options
 - maximum in-memory website console lines (`WEB_LOG_LINES`)
 - tray enablement and tooltip (`TRAY_ENABLED`, `TRAY_TOOLTIP`)
 - Cloudflare Tunnel enablement (`ENABLE_CLOUDFLARE_TUNNEL`), public URL

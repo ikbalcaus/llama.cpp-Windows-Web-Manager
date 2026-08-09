@@ -69,6 +69,9 @@ LLAMA_MTP_DRAFT_N_MAX = int(os.environ["LLAMA_MTP_DRAFT_N_MAX"])
 LLAMA_NO_MMPROJ_OFFLOAD = (
     os.environ["LLAMA_NO_MMPROJ_OFFLOAD"].strip().lower() in {"1", "true", "yes", "on"}
 )
+LLAMA_CACHE_REUSE = int(os.environ.get("LLAMA_CACHE_REUSE", "0"))
+if LLAMA_CACHE_REUSE < 0:
+    raise ValueError("LLAMA_CACHE_REUSE must be zero or a positive integer")
 WEB_LOG_LINES = int(os.environ["WEB_LOG_LINES"])
 TRAY_ENABLED = os.environ["TRAY_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
 QUANTIZATION_RE = re.compile(r"(?i)^q[0-9]+$")
@@ -260,6 +263,8 @@ class LlamaServerManager:
             ]
         )
         command.extend(["--reasoning", "off", "--reasoning-budget", "0"])
+        if LLAMA_CACHE_REUSE > 0:
+            command.extend(["--cache-reuse", str(LLAMA_CACHE_REUSE)])
         command.extend(["--alias", LLAMA_ALIAS])
         command.extend(["--host", LLAMA_HOST, "--port", str(LLAMA_PORT)])
         mtp_draft_path = self._mtp_draft_path_for(model_path)

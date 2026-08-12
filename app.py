@@ -821,6 +821,7 @@ def _request_slot_summary(slot: dict[str, Any]) -> str | None:
             "prompt": [*prompt, CONTEXT_SUMMARY_INSTRUCTION],
             "n_predict": 400,
             "temperature": 0.2,
+            "priority": -1,
         }
     ).encode("utf-8")
     request = Request(
@@ -846,7 +847,7 @@ class ContextSummarizer:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._last_summary_at = 0.0
+        self._last_attempt_at = 0.0
 
     @property
     def enabled(self) -> bool:
@@ -857,6 +858,10 @@ class ContextSummarizer:
             return False
         if not manager.status()["running"]:
             return False
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last_attempt_at < self._cooldown:
+                return False
         try:
             slots = _read_slots()
         except (OSError, ValueError, URLError, json.JSONDecodeError):
@@ -866,6 +871,8 @@ class ContextSummarizer:
         usage = 0.0
         target: dict[str, Any] | None = None
         for slot in slots:
+            if slot.get("state") not in (0, None):
+                continue
             n_ctx = slot.get("n_ctx") or 0
             n_past = slot.get("n_past") or 0
             if n_ctx > 0 and n_past > 0:
@@ -876,16 +883,13 @@ class ContextSummarizer:
         if target is None or usage < self._threshold:
             return False
         with self._lock:
-            if time.monotonic() - self._last_summary_at < self._cooldown:
-                return False
+            self._last_attempt_at = now
         try:
             summary = _request_slot_summary(target)
         except (OSError, ValueError, URLError, json.JSONDecodeError):
             return False
         if not summary:
             return False
-        with self._lock:
-            self._last_summary_at = time.monotonic()
         manager._append_log(
             "context-shift",
             f"Context {usage * 100:.1f}% full: session summarized.\n{summary}",

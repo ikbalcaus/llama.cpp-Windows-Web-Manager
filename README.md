@@ -140,7 +140,10 @@ followed by the same `--spec-type` flags. In both cases the model card shows the
 - llama.cpp, Flask, and Caddy hosts/ports
 - default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`), flash attention
   (`LLAMA_FLASH_ATTN`), KV cache quantization (`LLAMA_KV_CACHE_QUANTIZATION`, one
-  of `4`, `8`, or `off`), reasoning, alias, mmproj, cache reuse
+  of `4`, `8`, or `off`), context shift summarizer (`LLAMA_CONTEXT_SHIFT`,
+  enables the session summarizer; summaries are
+  triggered once slot usage exceeds `LLAMA_CONTEXT_SHIFT_THRESHOLD` on
+  `0.85`), reasoning, alias, mmproj, cache reuse
   (`LLAMA_CACHE_REUSE`), CORS origins (`LLAMA_CORS_ORIGINS`), and MTP options
 - maximum in-memory website console lines (`WEB_LOG_LINES`)
 - tray enablement and tooltip (`TRAY_ENABLED`, `TRAY_TOOLTIP`)

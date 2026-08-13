@@ -43,23 +43,21 @@
           id="context-size-slider"
           type="range"
           min="0"
-          max="3"
+          max="{{ context_sizes | length - 1 }}"
           step="1"
           value="{{ default_context_index }}"
           list="context-size-marks"
           aria-describedby="context-size-help"
         >
         <datalist id="context-size-marks">
-          <option value="0" label="16K"></option>
-          <option value="1" label="32K"></option>
-          <option value="2" label="64K"></option>
-          <option value="3" label="128K"></option>
+          {% for size in context_sizes %}
+          <option value="{{ loop.index0 }}" label="{{ size // 1024 }}K"></option>
+          {% endfor %}
         </datalist>
         <div class="context-range-labels" aria-hidden="true">
-          <span>16K</span>
-          <span>32K</span>
-          <span>64K</span>
-          <span>128K</span>
+          {% for size in context_sizes %}
+          <span>{{ size // 1024 }}K</span>
+          {% endfor %}
         </div>
       </div>
     </section>
@@ -175,6 +173,7 @@
     </section>
 
   </main>
+  <script>window.CONTEXT_SIZES = {{ context_sizes | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

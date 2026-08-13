@@ -36,7 +36,7 @@ const persistedMetricKeys = [
   "vram_used_bytes",
   "vram_total_bytes",
 ];
-const contextSizes = [16384, 32768, 65536, 131072];
+const contextSizes = window.CONTEXT_SIZES || [16384, 32768, 65536, 131072];
 let models = [];
 let latestStatus = {
   running: false,

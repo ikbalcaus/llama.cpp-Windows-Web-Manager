@@ -138,12 +138,11 @@ followed by the same `--spec-type` flags. In both cases the model card shows the
 - llama-server, Caddy, and Caddyfile paths; the Cloudflare Tunnel path only
   when enabled
 - llama.cpp, Flask, and Caddy hosts/ports
-- default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`), flash attention
+- default context size (`LLAMA_DEFAULT_CONTEXT_SIZE`) and the selectable context
+  sizes (`LLAMA_MIN_CONTEXT_SIZE` to `LLAMA_MAX_CONTEXT_SIZE`, doubling each step
+  from min to max, e.g. 16K/32K/64K/128K), flash attention
   (`LLAMA_FLASH_ATTN`), KV cache quantization (`LLAMA_KV_CACHE_QUANTIZATION`, one
-  of `4`, `8`, or `off`), context shift summarizer (`LLAMA_CONTEXT_SHIFT`,
-  enables the session summarizer; summaries are
-  triggered once slot usage exceeds `LLAMA_CONTEXT_SHIFT_THRESHOLD` on
-  `0.85`), reasoning, alias, mmproj, cache reuse
+  of `4`, `8`, or `off`), reasoning, alias, mmproj, cache reuse
   (`LLAMA_CACHE_REUSE`), CORS origins (`LLAMA_CORS_ORIGINS`), and MTP options
 - maximum in-memory website console lines (`WEB_LOG_LINES`)
 - tray enablement and tooltip (`TRAY_ENABLED`, `TRAY_TOOLTIP`)

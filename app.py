@@ -4,7 +4,6 @@ import atexit
 import csv
 import io
 import ipaddress
-import json
 import os
 import re
 import shutil
@@ -12,15 +11,12 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 import webbrowser
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 import psutil
 from dotenv import load_dotenv
@@ -67,6 +63,8 @@ ENABLE_CLOUDFLARE_TUNNEL = os.environ.get(
 CLOUDFLARE_TUNNEL_TOKEN = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "").strip()
 CLOUDFLARE_TUNNEL_URL = os.environ.get("CLOUDFLARE_TUNNEL_URL", "").strip()
 LLAMA_DEFAULT_CONTEXT_SIZE = int(os.environ["LLAMA_DEFAULT_CONTEXT_SIZE"])
+LLAMA_MIN_CONTEXT_SIZE = int(os.environ.get("LLAMA_MIN_CONTEXT_SIZE", "16384"))
+LLAMA_MAX_CONTEXT_SIZE = int(os.environ.get("LLAMA_MAX_CONTEXT_SIZE", "131072"))
 LLAMA_ALIAS = os.environ["LLAMA_ALIAS"]
 LLAMA_MTP_SPEC_TYPE = os.environ["LLAMA_MTP_SPEC_TYPE"]
 LLAMA_MTP_DRAFT_N_MAX = int(os.environ["LLAMA_MTP_DRAFT_N_MAX"])
@@ -87,15 +85,6 @@ LLAMA_KV_CACHE_QUANTIZATION = os.environ.get(
 LLAMA_KV_CACHE_TYPES = {"4": "q4_0", "8": "q8_0", "off": None}
 if LLAMA_KV_CACHE_QUANTIZATION not in LLAMA_KV_CACHE_TYPES:
     raise ValueError("LLAMA_KV_CACHE_QUANTIZATION must be one of: 4, 8, off")
-LLAMA_CONTEXT_SHIFT = (
-    os.environ.get("LLAMA_CONTEXT_SHIFT", "false").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
-CONTEXT_SHIFT_SUMMARIZE_THRESHOLD = float(
-    os.environ.get("LLAMA_CONTEXT_SHIFT_THRESHOLD", "0.85")
-)
-if not 0.0 < CONTEXT_SHIFT_SUMMARIZE_THRESHOLD < 1.0:
-    raise ValueError("LLAMA_CONTEXT_SHIFT_THRESHOLD must be between 0 and 1")
 WEB_LOG_LINES = int(os.environ["WEB_LOG_LINES"])
 TRAY_ENABLED = os.environ["TRAY_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
 QUANTIZATION_RE = re.compile(r"(?i)^q[0-9]+$")
@@ -114,7 +103,23 @@ WEB_SEARCH_MAX_TURNS = int(
     os.environ.get("WEB_SEARCH_MAX_TURNS", str(DEFAULT_AGENTIC_MAX_TURNS))
 )
 
-ALLOWED_CONTEXT_SIZES = (16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024)
+def generate_context_sizes(min_size: int, max_size: int) -> tuple[int, ...]:
+    if min_size <= 0:
+        raise ValueError("LLAMA_MIN_CONTEXT_SIZE must be a positive integer")
+    if max_size < min_size:
+        raise ValueError("LLAMA_MAX_CONTEXT_SIZE must be >= LLAMA_MIN_CONTEXT_SIZE")
+    sizes: list[int] = []
+    value = min_size
+    while value < max_size:
+        sizes.append(value)
+        value *= 2
+    sizes.append(max_size)
+    return tuple(sizes)
+
+
+ALLOWED_CONTEXT_SIZES = generate_context_sizes(
+    LLAMA_MIN_CONTEXT_SIZE, LLAMA_MAX_CONTEXT_SIZE
+)
 class ForwardedPrefixMiddleware:
     """Apply Caddy's trusted prefix so Flask generates prefix-aware URLs."""
 
@@ -789,145 +794,8 @@ class ResourceMonitor:
         self._stop_event.set()
 
 
-CONTEXT_SHIFT_MONITOR_INTERVAL_SECONDS = 3.0
-CONTEXT_SHIFT_SUMMARIZE_COOLDOWN_SECONDS = 300.0
-CONTEXT_SHIFT_SUMMARY_FILE = PROJECT_DIR / "llama-context-summaries.txt"
-CONTEXT_SUMMARY_INSTRUCTION = (
-    "\n\nSummarize the entire conversation above into a concise summary that "
-    "captures all key facts, decisions and the user's goal, so the session can "
-    "continue from the summary alone. Begin with 'SESSION SUMMARY:'."
-)
-
-
-def _llama_server_base_url() -> str:
-    return f"http://127.0.0.1:{LLAMA_PORT}"
-
-
-def _read_slots() -> list[dict[str, Any]]:
-    request = Request(f"{_llama_server_base_url()}/slots", method="GET")
-    with urlopen(request, timeout=5) as response:
-        payload = json.load(response)
-    if not isinstance(payload, list):
-        return []
-    return [slot for slot in payload if isinstance(slot, dict)]
-
-
-def _request_slot_summary(slot: dict[str, Any]) -> str | None:
-    prompt = slot.get("prompt")
-    if not prompt:
-        return None
-    body = json.dumps(
-        {
-            "prompt": [*prompt, CONTEXT_SUMMARY_INSTRUCTION],
-            "n_predict": 400,
-            "temperature": 0.2,
-            "priority": -1,
-        }
-    ).encode("utf-8")
-    request = Request(
-        f"{_llama_server_base_url()}/completion",
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    with urlopen(request, timeout=120) as response:
-        result = json.load(response)
-    content = result.get("content") if isinstance(result, dict) else None
-    if not content:
-        return None
-    return content.strip()
-
-
-class ContextSummarizer:
-    """Watch llama-server slot usage and summarize the session past a threshold."""
-
-    def __init__(self, threshold: float, cooldown_seconds: float) -> None:
-        self._threshold = threshold
-        self._cooldown = cooldown_seconds
-        self._lock = threading.Lock()
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._last_attempt_at = 0.0
-
-    @property
-    def enabled(self) -> bool:
-        return LLAMA_CONTEXT_SHIFT
-
-    def maybe_summarize(self) -> bool:
-        if not self.enabled:
-            return False
-        if not manager.status()["running"]:
-            return False
-        now = time.monotonic()
-        with self._lock:
-            if now - self._last_attempt_at < self._cooldown:
-                return False
-        try:
-            slots = _read_slots()
-        except (OSError, ValueError, URLError, json.JSONDecodeError):
-            return False
-        if not slots:
-            return False
-        usage = 0.0
-        target: dict[str, Any] | None = None
-        for slot in slots:
-            if slot.get("state") not in (0, None):
-                continue
-            n_ctx = slot.get("n_ctx") or 0
-            n_past = slot.get("n_past") or 0
-            if n_ctx > 0 and n_past > 0:
-                ratio = n_past / n_ctx
-                if ratio > usage:
-                    usage = ratio
-                    target = slot
-        if target is None or usage < self._threshold:
-            return False
-        with self._lock:
-            self._last_attempt_at = now
-        try:
-            summary = _request_slot_summary(target)
-        except (OSError, ValueError, URLError, json.JSONDecodeError):
-            return False
-        if not summary:
-            return False
-        manager._append_log(
-            "context-shift",
-            f"Context {usage * 100:.1f}% full: session summarized.\n{summary}",
-        )
-        try:
-            with CONTEXT_SHIFT_SUMMARY_FILE.open("a", encoding="utf-8") as handle:
-                handle.write(f"[{utc_now()}] usage={usage * 100:.1f}%\n{summary}\n\n")
-        except OSError:
-            pass
-        return True
-
-    def _run(self) -> None:
-        while not self._stop_event.wait(CONTEXT_SHIFT_MONITOR_INTERVAL_SECONDS):
-            try:
-                self.maybe_summarize()
-            except Exception:
-                continue
-
-    def start(self) -> None:
-        if not self.enabled:
-            return
-        with self._lock:
-            if self._thread is not None:
-                return
-            self._thread = threading.Thread(
-                target=self._run, name="context-summarizer", daemon=True
-            )
-            self._thread.start()
-
-    def shutdown(self) -> None:
-        self._stop_event.set()
-
-
 manager = LlamaServerManager(LLAMA_SERVER_PATH, MODELS_DIR)
 resource_monitor = ResourceMonitor()
-context_summarizer = ContextSummarizer(
-    CONTEXT_SHIFT_SUMMARIZE_THRESHOLD, CONTEXT_SHIFT_SUMMARIZE_COOLDOWN_SECONDS
-)
 
 app = Flask(
     __name__,
@@ -969,6 +837,7 @@ def index() -> str:
         default_context_index=ALLOWED_CONTEXT_SIZES.index(
             LLAMA_DEFAULT_CONTEXT_SIZE
         ),
+        context_sizes=ALLOWED_CONTEXT_SIZES,
         api_urls={
             "models": url_for("api_models"),
             "status": url_for("api_status"),
@@ -1444,7 +1313,6 @@ def run() -> int:
         stopping.set()
         manager.shutdown()
         resource_monitor.shutdown()
-        context_summarizer.shutdown()
         server.close()
         for service in reversed(services):
             terminate_service(service.process)
@@ -1465,7 +1333,6 @@ def run() -> int:
                 return
 
     threading.Thread(target=monitor_services, name="service-monitor", daemon=True).start()
-    context_summarizer.start()
     use_tray = os.name == "nt" and TRAY_ENABLED and "--no-tray" not in sys.argv[1:]
     try:
         if use_tray:
@@ -1485,7 +1352,6 @@ def run() -> int:
 
 atexit.register(manager.shutdown)
 atexit.register(resource_monitor.shutdown)
-atexit.register(context_summarizer.shutdown)
 
 if __name__ == "__main__":
     try:

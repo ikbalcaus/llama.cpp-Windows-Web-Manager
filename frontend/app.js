@@ -471,7 +471,12 @@ async function loadLogs() {
       const line = document.createElement("div");
       line.className = "log-line";
       const time = document.createElement("time");
-      time.textContent = entry.timestamp.slice(11, 19);
+      const entryDate = new Date(entry.timestamp);
+      time.textContent = [
+        String(entryDate.getHours()).padStart(2, "0"),
+        String(entryDate.getMinutes()).padStart(2, "0"),
+        String(entryDate.getSeconds()).padStart(2, "0"),
+      ].join(":");
       const source = document.createElement("span");
       source.className = "log-source";
       source.textContent = entry.source;

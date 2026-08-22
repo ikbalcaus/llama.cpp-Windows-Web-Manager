@@ -8,11 +8,10 @@ import json
 import os
 import socket
 import sys
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from dotenv import load_dotenv
@@ -21,7 +20,6 @@ from dotenv import load_dotenv
 PROJECT_DIR = Path(__file__).resolve().parent
 load_dotenv(PROJECT_DIR / ".env")
 
-DEFAULT_SEARXNG_URL = os.environ["SEARXNG_URL"].strip()
 DEFAULT_MAX_RESULTS = 5
 DEFAULT_TIMEOUT_SECONDS = 15
 DEFAULT_FETCH_MAX_CHARS = 30_000
@@ -30,17 +28,11 @@ MAX_FETCH_BYTES = 2_000_000
 
 
 def validate_web_search_configuration(
-    searxng_url: str,
     max_results: int,
     timeout_seconds: int,
     fetch_max_chars: int = DEFAULT_FETCH_MAX_CHARS,
     agentic_max_turns: int = DEFAULT_AGENTIC_MAX_TURNS,
 ) -> None:
-    parsed = urlparse(searxng_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("SEARXNG_URL must be a valid http:// or https:// URL")
-    if parsed.username or parsed.password or parsed.fragment:
-        raise ValueError("SEARXNG_URL cannot contain credentials or a fragment")
     if not 1 <= max_results <= 20:
         raise ValueError("WEB_SEARCH_MAX_RESULTS must be between 1 and 20")
     if not 1 <= timeout_seconds <= 120:
@@ -53,7 +45,6 @@ def validate_web_search_configuration(
 
 def build_web_search_arguments(
     enabled: bool,
-    searxng_url: str,
     max_results: int,
     timeout_seconds: int,
     fetch_max_chars: int = DEFAULT_FETCH_MAX_CHARS,
@@ -66,7 +57,6 @@ def build_web_search_arguments(
         return []
 
     validate_web_search_configuration(
-        searxng_url,
         max_results,
         timeout_seconds,
         fetch_max_chars,
@@ -75,11 +65,10 @@ def build_web_search_arguments(
     server_script = (script_path or Path(__file__)).resolve()
     mcp_configuration = {
         "mcpServers": {
-            "searxng": {
+            "web-research": {
                 "command": python_executable or sys.executable,
                 "args": [str(server_script)],
                 "env": {
-                    "SEARXNG_URL": searxng_url,
                     "WEB_SEARCH_MAX_RESULTS": str(max_results),
                     "WEB_SEARCH_TIMEOUT": str(timeout_seconds),
                     "WEB_FETCH_MAX_CHARS": str(fetch_max_chars),
@@ -102,58 +91,6 @@ def build_web_search_arguments(
             separators=(",", ":"),
         ),
     ]
-
-
-class _SearXNGHTMLParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.results: list[dict[str, str]] = []
-        self._article_depth = 0
-        self._capture_title = False
-        self._capture_content = False
-        self._current: dict[str, str] | None = None
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attributes = dict(attrs)
-        classes = set((attributes.get("class") or "").split())
-        if tag == "article" and "result" in classes:
-            self._article_depth = 1
-            self._current = {"title": "", "url": "", "content": ""}
-            return
-        if not self._article_depth or self._current is None:
-            return
-        if tag == "article":
-            self._article_depth += 1
-        if tag == "a" and ("url_header" in classes or not self._current["url"]):
-            href = (attributes.get("href") or "").strip()
-            if href.startswith(("http://", "https://")):
-                self._current["url"] = href
-                self._capture_title = True
-        if tag in {"p", "div"} and classes.intersection({"content", "result-content"}):
-            self._capture_content = True
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "a":
-            self._capture_title = False
-        elif tag in {"p", "div"}:
-            self._capture_content = False
-        if tag == "article" and self._article_depth:
-            self._article_depth -= 1
-            if self._article_depth == 0 and self._current:
-                if self._current["title"] and self._current["url"]:
-                    self.results.append(self._current)
-                self._current = None
-
-    def handle_data(self, data: str) -> None:
-        if self._current is None:
-            return
-        text = " ".join(data.split())
-        if not text:
-            return
-        if self._capture_title:
-            self._current["title"] = f"{self._current['title']} {text}".strip()
-        elif self._capture_content:
-            self._current["content"] = f"{self._current['content']} {text}".strip()
 
 
 def _normalize_results(raw_results: Any, max_results: int) -> list[dict[str, Any]]:
@@ -184,52 +121,17 @@ def _normalize_results(raw_results: Any, max_results: int) -> list[dict[str, Any
     return results
 
 
-def _search_searxng_instance(
-    query: str,
-    base_url: str,
-    max_results: int,
-    timeout_seconds: int,
-) -> list[dict[str, Any]]:
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    }
-    json_endpoint = (
-        f"{base_url.rstrip('/')}/search?"
-        f"{urlencode({'q': query, 'format': 'json', 'safesearch': '1'})}"
-    )
-    try:
-        with urlopen(Request(json_endpoint, headers=headers), timeout=timeout_seconds) as response:
-            payload = json.load(response)
-        results = _normalize_results(payload.get("results", []), max_results)
-        if results:
-            return results
-    except (HTTPError, URLError, OSError, json.JSONDecodeError, ValueError):
-        pass
-
-    html_endpoint = (
-        f"{base_url.rstrip('/')}/search?"
-        f"{urlencode({'q': query, 'safesearch': '1'})}"
-    )
-    html_headers = dict(headers, Accept="text/html")
-    with urlopen(Request(html_endpoint, headers=html_headers), timeout=timeout_seconds) as response:
-        html = response.read(2_000_000).decode("utf-8", "replace")
-    parser = _SearXNGHTMLParser()
-    parser.feed(html)
-    return _normalize_results(parser.results, max_results)
-
-
-def _search_python_fallback(
+def _search_duckduckgo(
     query: str, max_results: int, timeout_seconds: int
 ) -> list[dict[str, Any]]:
     try:
         from ddgs import DDGS
     except ImportError as error:
         raise RuntimeError(
-            "Python web-search fallback requires 'ddgs'. Run: pip install -r requirements.txt"
+            "Web search requires 'ddgs'. Run: pip install -r requirements.txt"
         ) from error
-    # Some search backends emit diagnostics directly to stderr. Keep the MCP
-    # protocol and the manager's recent-output view clean.
+    # Some backends emit diagnostics directly to stderr. Keep the MCP protocol
+    # and the manager's recent-output view clean.
     with contextlib.redirect_stderr(io.StringIO()):
         raw_results = DDGS(timeout=timeout_seconds).text(
             query,
@@ -240,10 +142,9 @@ def _search_python_fallback(
     return _normalize_results(raw_results, max_results)
 
 
-def search_searxng(
+def search_web(
     query: str,
     *,
-    searxng_url: str,
     max_results: int,
     timeout_seconds: int,
 ) -> dict[str, Any]:
@@ -253,31 +154,14 @@ def search_searxng(
     if len(query) > 500:
         raise ValueError("Search query cannot exceed 500 characters")
 
-    validate_web_search_configuration(searxng_url, max_results, timeout_seconds)
+    validate_web_search_configuration(max_results, timeout_seconds)
     try:
-        results = _search_searxng_instance(
-            query, searxng_url, max_results, min(timeout_seconds, 8)
-        )
-        if results:
-            return {
-                "query": query,
-                "provider": "SearXNG",
-                "instance": searxng_url,
-                "results": results,
-            }
-    except (HTTPError, URLError, OSError, ValueError):
-        pass
-
-    try:
-        results = _search_python_fallback(query, max_results, timeout_seconds)
+        results = _search_duckduckgo(query, max_results, timeout_seconds)
     except Exception as error:
-        raise RuntimeError(
-            "Web search failed through both SearXNG and the Python fallback: "
-            f"{error}"
-        ) from error
+        raise RuntimeError(f"Web search failed: {error}") from error
     if not results:
         raise RuntimeError("Web search returned no results")
-    return {"query": query, "provider": "Python fallback", "results": results}
+    return {"query": query, "provider": "DuckDuckGo", "results": results}
 
 
 def _validate_public_url(url: str) -> str:
@@ -436,7 +320,6 @@ def run_mcp_server() -> None:
             "Web search requires the 'mcp' package. Run: pip install -r requirements.txt"
         ) from error
 
-    searxng_url = os.environ.get("SEARXNG_URL", DEFAULT_SEARXNG_URL).strip()
     max_results = int(
         os.environ.get("WEB_SEARCH_MAX_RESULTS", str(DEFAULT_MAX_RESULTS))
     )
@@ -447,7 +330,6 @@ def run_mcp_server() -> None:
         os.environ.get("WEB_FETCH_MAX_CHARS", str(DEFAULT_FETCH_MAX_CHARS))
     )
     validate_web_search_configuration(
-        searxng_url,
         max_results,
         timeout_seconds,
         fetch_max_chars,
@@ -469,9 +351,8 @@ def run_mcp_server() -> None:
     async def web_search(query: str) -> dict[str, Any]:
         """Discover web sources. After searching, use fetch_url on relevant result URLs before answering. This tool may be called repeatedly with refined queries."""
         return await asyncio.to_thread(
-            search_searxng,
+            search_web,
             query,
-            searxng_url=searxng_url,
             max_results=max_results,
             timeout_seconds=timeout_seconds,
         )

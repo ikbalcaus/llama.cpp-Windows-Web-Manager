@@ -27,7 +27,6 @@ from web_search import (
     DEFAULT_AGENTIC_MAX_TURNS,
     DEFAULT_FETCH_MAX_CHARS,
     DEFAULT_MAX_RESULTS,
-    DEFAULT_SEARXNG_URL,
     DEFAULT_TIMEOUT_SECONDS,
     build_web_search_arguments,
     validate_web_search_configuration,
@@ -89,7 +88,6 @@ WEB_LOG_LINES = int(os.environ["WEB_LOG_LINES"])
 TRAY_ENABLED = os.environ["TRAY_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
 QUANTIZATION_RE = re.compile(r"(?i)^q[0-9]+$")
 TRAY_TOOLTIP = os.environ["TRAY_TOOLTIP"].strip()
-SEARXNG_URL = os.environ.get("SEARXNG_URL", DEFAULT_SEARXNG_URL).strip()
 WEB_SEARCH_MAX_RESULTS = int(
     os.environ.get("WEB_SEARCH_MAX_RESULTS", str(DEFAULT_MAX_RESULTS))
 )
@@ -319,7 +317,6 @@ class LlamaServerManager:
             )
         web_search_arguments = build_web_search_arguments(
             should_enable_web_search,
-            SEARXNG_URL,
             WEB_SEARCH_MAX_RESULTS,
             WEB_SEARCH_TIMEOUT,
             WEB_FETCH_MAX_CHARS,
@@ -1019,7 +1016,6 @@ def validate_public_url(value: str, name: str) -> str:
 def validate_configuration() -> None:
     validate_context_size(LLAMA_DEFAULT_CONTEXT_SIZE)
     validate_web_search_configuration(
-        SEARXNG_URL,
         WEB_SEARCH_MAX_RESULTS,
         WEB_SEARCH_TIMEOUT,
         WEB_FETCH_MAX_CHARS,

@@ -228,9 +228,11 @@ required and will fail startup if missing.
 | `LLAMA_MTP_SPEC_TYPE` | – | Spec type for MTP, e.g. `draft-mtp` |
 | `LLAMA_MTP_DRAFT_N_MAX` | – | `--spec-draft-n-max` value |
 | `LLAMA_NO_MMPROJ_OFFLOAD` | – | Adds `--no-mmproj-offload` when `true` |
-| `LLAMA_FLASH_ATTN` | `false` | Adds `--flash-attn` when `true` |
-| `LLAMA_KV_CACHE_QUANTIZATION` | `off` | `4`, `8`, or `off`; maps to `--cache-type-k/v` |
+| `LLAMA_FLASH_ATTN` | `false` | Adds `--flash-attn on` when `true` |
+| `LLAMA_KV_CACHE_TYPE_K` | `off` | Key cache type `4`, `8`, or `off`; maps to `--cache-type-k` |
+| `LLAMA_KV_CACHE_TYPE_V` | `off` | Value cache type `4`, `8`, or `off`; maps to `--cache-type-v` |
 | `LLAMA_CACHE_REUSE` | `0` | Adds `--cache-reuse N`; `0` omits the flag |
+| `LLAMA_GPU_LAYERS` | `0` | Adds `-ngl N` (0–999); `0` omits the flag |
 | `LLAMA_CORS_ORIGINS` | *(empty)* | Adds `--cors-origins <value>`; empty keeps llama-server's default |
 | `WEB_LOG_LINES` | – | Max in-memory console lines kept for the website |
 | `TRAY_ENABLED` | – | Show the notification-area icon when `true` |
@@ -259,8 +261,10 @@ plus these settings:
 
 ```text
 llama-server -m <model> [-c <context>]
-  [--flash-attn]                     when LLAMA_FLASH_ATTN=true
-  [--cache-type-k/v q4_0|q8_0]       when LLAMA_KV_CACHE_QUANTIZATION is 4/8
+  [--flash-attn on]                  when LLAMA_FLASH_ATTN=true
+  [-ngl N]                           when LLAMA_GPU_LAYERS>0 (0–999)
+  [--cache-type-k q4_0|q8_0]         when LLAMA_KV_CACHE_TYPE_K is 4/8
+  [--cache-type-v q4_0|q8_0]         when LLAMA_KV_CACHE_TYPE_V is 4/8
   --reasoning off --reasoning-budget 0
   [--cache-reuse N]                  when LLAMA_CACHE_REUSE>0
   --alias <alias>

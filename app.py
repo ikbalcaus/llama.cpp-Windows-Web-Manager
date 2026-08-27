@@ -73,17 +73,23 @@ LLAMA_NO_MMPROJ_OFFLOAD = (
 LLAMA_CACHE_REUSE = int(os.environ.get("LLAMA_CACHE_REUSE", "0"))
 if LLAMA_CACHE_REUSE < 0:
     raise ValueError("LLAMA_CACHE_REUSE must be zero or a positive integer")
+LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", "0"))
+if not 0 <= LLAMA_GPU_LAYERS <= 999:
+    raise ValueError("LLAMA_GPU_LAYERS must be between 0 and 999")
 LLAMA_CORS_ORIGINS = os.environ.get("LLAMA_CORS_ORIGINS", "").strip()
 LLAMA_FLASH_ATTN = (
     os.environ.get("LLAMA_FLASH_ATTN", "false").strip().lower()
     in {"1", "true", "yes", "on"}
 )
-LLAMA_KV_CACHE_QUANTIZATION = os.environ.get(
-    "LLAMA_KV_CACHE_QUANTIZATION", "off"
-).strip().lower()
 LLAMA_KV_CACHE_TYPES = {"4": "q4_0", "8": "q8_0", "off": None}
-if LLAMA_KV_CACHE_QUANTIZATION not in LLAMA_KV_CACHE_TYPES:
-    raise ValueError("LLAMA_KV_CACHE_QUANTIZATION must be one of: 4, 8, off")
+LLAMA_KV_CACHE_TYPE_K = os.environ.get("LLAMA_KV_CACHE_TYPE_K", "off").strip().lower()
+LLAMA_KV_CACHE_TYPE_V = os.environ.get("LLAMA_KV_CACHE_TYPE_V", "off").strip().lower()
+for _kv_name, _kv_value in (
+    ("LLAMA_KV_CACHE_TYPE_K", LLAMA_KV_CACHE_TYPE_K),
+    ("LLAMA_KV_CACHE_TYPE_V", LLAMA_KV_CACHE_TYPE_V),
+):
+    if _kv_value not in LLAMA_KV_CACHE_TYPES:
+        raise ValueError(f"{_kv_name} must be one of: 4, 8, off")
 WEB_LOG_LINES = int(os.environ["WEB_LOG_LINES"])
 TRAY_ENABLED = os.environ["TRAY_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
 QUANTIZATION_RE = re.compile(r"(?i)^q[0-9]+$")
@@ -290,12 +296,15 @@ class LlamaServerManager:
             ]
         )
         if LLAMA_FLASH_ATTN:
-            command.append("--flash-attn")
-        kv_cache_type = LLAMA_KV_CACHE_TYPES[LLAMA_KV_CACHE_QUANTIZATION]
-        if kv_cache_type is not None:
-            command.extend(
-                ["--cache-type-k", kv_cache_type, "--cache-type-v", kv_cache_type]
-            )
+            command.extend(["--flash-attn", "on"])
+        if LLAMA_GPU_LAYERS > 0:
+            command.extend(["-ngl", str(LLAMA_GPU_LAYERS)])
+        kv_cache_type_k = LLAMA_KV_CACHE_TYPES[LLAMA_KV_CACHE_TYPE_K]
+        kv_cache_type_v = LLAMA_KV_CACHE_TYPES[LLAMA_KV_CACHE_TYPE_V]
+        if kv_cache_type_k is not None:
+            command.extend(["--cache-type-k", kv_cache_type_k])
+        if kv_cache_type_v is not None:
+            command.extend(["--cache-type-v", kv_cache_type_v])
         command.extend(["--reasoning", "off", "--reasoning-budget", "0"])
         if LLAMA_CACHE_REUSE > 0:
             command.extend(["--cache-reuse", str(LLAMA_CACHE_REUSE)])

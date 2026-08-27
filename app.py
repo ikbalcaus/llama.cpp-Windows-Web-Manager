@@ -92,6 +92,14 @@ for _kv_name, _kv_value in (
         raise ValueError(f"{_kv_name} must be one of: 4, 8, off")
 WEB_LOG_LINES = int(os.environ["WEB_LOG_LINES"])
 TRAY_ENABLED = os.environ["TRAY_ENABLED"].strip().lower() in {"1", "true", "yes", "on"}
+LLAMA_LOAD_MMPROJ_BY_DEFAULT = (
+    os.environ.get("LLAMA_LOAD_MMPROJ_BY_DEFAULT", "true").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+LLAMA_WEB_SEARCH_BY_DEFAULT = (
+    os.environ.get("LLAMA_WEB_SEARCH_BY_DEFAULT", "true").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 QUANTIZATION_RE = re.compile(r"(?i)^q[0-9]+$")
 TRAY_TOOLTIP = os.environ["TRAY_TOOLTIP"].strip()
 WEB_SEARCH_MAX_RESULTS = int(
@@ -159,7 +167,7 @@ def validate_context_size(value: Any) -> int:
 
 def validate_load_mmproj(value: Any) -> bool:
     if value is None:
-        return True
+        return LLAMA_LOAD_MMPROJ_BY_DEFAULT
     if not isinstance(value, bool):
         raise ValueError("load_mmproj must be a boolean")
     return value
@@ -167,7 +175,7 @@ def validate_load_mmproj(value: Any) -> bool:
 
 def validate_web_search(value: Any) -> bool:
     if value is None:
-        return True
+        return LLAMA_WEB_SEARCH_BY_DEFAULT
     if not isinstance(value, bool):
         raise ValueError("web_search must be a boolean")
     return value
@@ -844,6 +852,8 @@ def index() -> str:
             LLAMA_DEFAULT_CONTEXT_SIZE
         ),
         context_sizes=ALLOWED_CONTEXT_SIZES,
+        default_load_mmproj=LLAMA_LOAD_MMPROJ_BY_DEFAULT,
+        default_web_search=LLAMA_WEB_SEARCH_BY_DEFAULT,
         api_urls={
             "models": url_for("api_models"),
             "status": url_for("api_status"),

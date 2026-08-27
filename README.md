@@ -225,6 +225,8 @@ required and will fail startup if missing.
 | `LLAMA_MIN_CONTEXT_SIZE` | `16384` | Smallest selectable context size |
 | `LLAMA_MAX_CONTEXT_SIZE` | `131072` | Largest selectable context size |
 | `LLAMA_ALIAS` | – | Model alias passed as `--alias` |
+| `LLAMA_LOAD_MMPROJ_BY_DEFAULT` | `true` | Load MMPROJ by default in the UI |
+| `LLAMA_WEB_SEARCH_BY_DEFAULT` | `true` | Enable Web Search by default in the UI |
 | `LLAMA_MTP_SPEC_TYPE` | – | Spec type for MTP, e.g. `draft-mtp` |
 | `LLAMA_MTP_DRAFT_N_MAX` | – | `--spec-draft-n-max` value |
 | `LLAMA_NO_MMPROJ_OFFLOAD` | – | Adds `--no-mmproj-offload` when `true` |

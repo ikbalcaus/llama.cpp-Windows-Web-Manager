@@ -173,7 +173,9 @@
     </section>
 
   </main>
-  <script>window.CONTEXT_SIZES = {{ context_sizes | tojson }};</script>
+  <script>window.CONTEXT_SIZES = {{ context_sizes | tojson }};
+    window.DEFAULT_LOAD_MMPROJ = {{ default_load_mmproj | tojson }};
+    window.DEFAULT_WEB_SEARCH = {{ default_web_search | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

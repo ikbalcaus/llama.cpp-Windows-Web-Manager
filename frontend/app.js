@@ -37,6 +37,8 @@ const persistedMetricKeys = [
   "vram_total_bytes",
 ];
 const contextSizes = window.CONTEXT_SIZES || [16384, 32768, 65536, 131072];
+const defaultLoadMmproj = window.DEFAULT_LOAD_MMPROJ !== false;
+const defaultWebSearch = window.DEFAULT_WEB_SEARCH !== false;
 let models = [];
 let latestStatus = {
   running: false,
@@ -226,7 +228,7 @@ function renderModels() {
         && typeof latestStatus.load_mmproj === "boolean"
       )
         ? latestStatus.load_mmproj
-        : true;
+        : defaultLoadMmproj;
       mmprojToggle.dataset.loadMmproj = model.filename;
       mmprojToggle.dataset.userModified = "false";
       mmprojToggle.addEventListener("change", () => {
@@ -256,7 +258,7 @@ function renderModels() {
       && typeof latestStatus.web_search === "boolean"
     )
       ? latestStatus.web_search
-      : true;
+      : defaultWebSearch;
     webSearchToggle.dataset.webSearch = model.filename;
     webSearchToggle.dataset.userModified = "false";
     webSearchToggle.addEventListener("change", () => {

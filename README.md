@@ -238,6 +238,9 @@ required and will fail startup if missing.
 | `LLAMA_KV_CACHE_TYPE_V` | `off` | Value cache type `4`, `8`, or `off`; maps to `--cache-type-v` |
 | `LLAMA_CACHE_REUSE` | `0` | Adds `--cache-reuse N`; `0` omits the flag |
 | `LLAMA_GPU_LAYERS` | `0` | Adds `-ngl N` (0–999); `0` omits the flag |
+| `LLAMA_BATCH_SIZE` | `0` | Adds `-b N`; `0` omits the flag |
+| `LLAMA_UBATCH_SIZE` | `0` | Adds `-ub N`; `0` omits the flag |
+| `LLAMA_PARALLEL` | `0` | Adds `-np N` (0–8192); `0` omits the flag |
 | `LLAMA_CORS_ORIGINS` | *(empty)* | Adds `--cors-origins <value>`; empty keeps llama-server's default |
 | `WEB_LOG_LINES` | – | Max in-memory console lines kept for the website |
 | `TRAY_ENABLED` | – | Show the notification-area icon when `true` |
@@ -271,6 +274,9 @@ llama-server -m <model> [-c <context>]
   [--cache-type-k q4_0|q8_0]         when LLAMA_KV_CACHE_TYPE_K is 4/8
   [--cache-type-v q4_0|q8_0]         when LLAMA_KV_CACHE_TYPE_V is 4/8
   --reasoning-budget N
+  [-b N]                             when LLAMA_BATCH_SIZE>0
+  [-ub N]                            when LLAMA_UBATCH_SIZE>0
+  [-np N]                            when LLAMA_PARALLEL>0 (0–8192)
   [--cache-reuse N]                  when LLAMA_CACHE_REUSE>0
   --alias <alias>
   [--cors-origins <origins>]         when LLAMA_CORS_ORIGINS is set

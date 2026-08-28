@@ -263,7 +263,7 @@ function renderModels() {
       switchTrack.setAttribute("aria-hidden", "true");
       const switchLabel = document.createElement("span");
       switchLabel.className = "switch-label";
-      switchLabel.textContent = "MMPROJ";
+      switchLabel.textContent = "VISION";
       mmprojControl.title = "Load MMPROJ";
       mmprojControl.append(mmprojToggle, switchLabel, switchTrack);
       featureToggles.append(mmprojControl);

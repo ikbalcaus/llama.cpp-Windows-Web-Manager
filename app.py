@@ -76,6 +76,15 @@ if LLAMA_CACHE_REUSE < 0:
 LLAMA_GPU_LAYERS = int(os.environ.get("LLAMA_GPU_LAYERS", "0"))
 if not 0 <= LLAMA_GPU_LAYERS <= 999:
     raise ValueError("LLAMA_GPU_LAYERS must be between 0 and 999")
+LLAMA_BATCH_SIZE = int(os.environ.get("LLAMA_BATCH_SIZE", "0"))
+if LLAMA_BATCH_SIZE < 0:
+    raise ValueError("LLAMA_BATCH_SIZE must be zero or a positive integer")
+LLAMA_UBATCH_SIZE = int(os.environ.get("LLAMA_UBATCH_SIZE", "0"))
+if LLAMA_UBATCH_SIZE < 0:
+    raise ValueError("LLAMA_UBATCH_SIZE must be zero or a positive integer")
+LLAMA_PARALLEL = int(os.environ.get("LLAMA_PARALLEL", "0"))
+if not 0 <= LLAMA_PARALLEL <= 8192:
+    raise ValueError("LLAMA_PARALLEL must be between 0 and 8192")
 LLAMA_CORS_ORIGINS = os.environ.get("LLAMA_CORS_ORIGINS", "").strip()
 LLAMA_FLASH_ATTN = (
     os.environ.get("LLAMA_FLASH_ATTN", "false").strip().lower()
@@ -345,6 +354,12 @@ class LlamaServerManager:
         if kv_cache_type_v is not None:
             command.extend(["--cache-type-v", kv_cache_type_v])
         command.extend(["--reasoning-budget", str(selected_reasoning_budget)])
+        if LLAMA_BATCH_SIZE > 0:
+            command.extend(["-b", str(LLAMA_BATCH_SIZE)])
+        if LLAMA_UBATCH_SIZE > 0:
+            command.extend(["-ub", str(LLAMA_UBATCH_SIZE)])
+        if LLAMA_PARALLEL > 0:
+            command.extend(["-np", str(LLAMA_PARALLEL)])
         if LLAMA_CACHE_REUSE > 0:
             command.extend(["--cache-reuse", str(LLAMA_CACHE_REUSE)])
         command.extend(["--alias", LLAMA_ALIAS])

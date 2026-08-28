@@ -115,11 +115,11 @@ WEB_SEARCH_MAX_TURNS = int(
     os.environ.get("WEB_SEARCH_MAX_TURNS", str(DEFAULT_AGENTIC_MAX_TURNS))
 )
 
-def generate_context_sizes(min_size: int, max_size: int) -> tuple[int, ...]:
+def generate_power_of_two_sizes(min_size: int, max_size: int) -> tuple[int, ...]:
     if min_size <= 0:
-        raise ValueError("LLAMA_MIN_CONTEXT_SIZE must be a positive integer")
+        raise ValueError("min_size must be a positive integer")
     if max_size < min_size:
-        raise ValueError("LLAMA_MAX_CONTEXT_SIZE must be >= LLAMA_MIN_CONTEXT_SIZE")
+        raise ValueError("max_size must be >= min_size")
     sizes: list[int] = []
     value = min_size
     while value < max_size:
@@ -129,9 +129,26 @@ def generate_context_sizes(min_size: int, max_size: int) -> tuple[int, ...]:
     return tuple(sizes)
 
 
-ALLOWED_CONTEXT_SIZES = generate_context_sizes(
+ALLOWED_CONTEXT_SIZES = generate_power_of_two_sizes(
     LLAMA_MIN_CONTEXT_SIZE, LLAMA_MAX_CONTEXT_SIZE
 )
+LLAMA_MIN_REASONING_BUDGET = int(
+    os.environ.get("LLAMA_MIN_REASONING_BUDGET", "1024")
+)
+LLAMA_MAX_REASONING_BUDGET = int(
+    os.environ.get("LLAMA_MAX_REASONING_BUDGET", "16384")
+)
+LLAMA_DEFAULT_REASONING_BUDGET = int(
+    os.environ.get("LLAMA_DEFAULT_REASONING_BUDGET", "8192")
+)
+ALLOWED_REASONING_BUDGETS = generate_power_of_two_sizes(
+    LLAMA_MIN_REASONING_BUDGET, LLAMA_MAX_REASONING_BUDGET
+)
+if LLAMA_DEFAULT_REASONING_BUDGET not in ALLOWED_REASONING_BUDGETS:
+    raise ValueError(
+        "LLAMA_DEFAULT_REASONING_BUDGET must be one of: "
+        + ", ".join(str(size) for size in ALLOWED_REASONING_BUDGETS)
+    )
 class ForwardedPrefixMiddleware:
     """Apply Caddy's trusted prefix so Flask generates prefix-aware URLs."""
 
@@ -181,6 +198,17 @@ def validate_web_search(value: Any) -> bool:
     return value
 
 
+def validate_reasoning_budget(value: Any) -> int:
+    if value is None:
+        value = LLAMA_DEFAULT_REASONING_BUDGET
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("reasoning_budget must be an integer")
+    if value not in ALLOWED_REASONING_BUDGETS:
+        allowed = ", ".join(str(budget) for budget in ALLOWED_REASONING_BUDGETS)
+        raise ValueError(f"reasoning_budget must be one of: {allowed}")
+    return value
+
+
 class LlamaServerManager:
     def __init__(self, executable: Path, models_dir: Path) -> None:
         self.executable = executable
@@ -190,6 +218,7 @@ class LlamaServerManager:
         self._context_size: int | None = None
         self._load_mmproj: bool | None = None
         self._web_search: bool | None = None
+        self._reasoning_budget: int | None = None
         self._started_at: str | None = None
         self._logs: deque[dict[str, str]] = deque(maxlen=WEB_LOG_LINES)
         self._lock = threading.RLock()
@@ -280,9 +309,11 @@ class LlamaServerManager:
         context_size: Any = None,
         load_mmproj: Any = None,
         web_search: Any = None,
+        reasoning_budget: Any = None,
     ) -> list[str]:
         model_path = self._validated_model_path(filename)
         selected_context_size = validate_context_size(context_size)
+        selected_reasoning_budget = validate_reasoning_budget(reasoning_budget)
         should_load_mmproj = validate_load_mmproj(load_mmproj)
         should_enable_web_search = validate_web_search(web_search)
         if not self.executable.is_file():
@@ -313,7 +344,7 @@ class LlamaServerManager:
             command.extend(["--cache-type-k", kv_cache_type_k])
         if kv_cache_type_v is not None:
             command.extend(["--cache-type-v", kv_cache_type_v])
-        command.extend(["--reasoning", "off", "--reasoning-budget", "0"])
+        command.extend(["--reasoning-budget", str(selected_reasoning_budget)])
         if LLAMA_CACHE_REUSE > 0:
             command.extend(["--cache-reuse", str(LLAMA_CACHE_REUSE)])
         command.extend(["--alias", LLAMA_ALIAS])
@@ -395,6 +426,19 @@ class LlamaServerManager:
             return None
         return "--mcp-servers-json" in arguments
 
+    def _reasoning_budget_from_process(self, process: psutil.Process) -> int | None:
+        try:
+            arguments = process.cmdline()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            return None
+        for index, argument in enumerate(arguments[:-1]):
+            if argument not in {"--reasoning-budget"}:
+                continue
+            raw_budget = arguments[index + 1]
+            if raw_budget.isascii() and raw_budget.isdecimal():
+                return int(raw_budget)
+        return None
+
     def _append_log(self, source: str, message: str) -> None:
         cleaned = message.rstrip("\r\n")
         if not cleaned:
@@ -432,6 +476,7 @@ class LlamaServerManager:
                 self._context_size = None
                 self._load_mmproj = None
                 self._web_search = None
+                self._reasoning_budget = None
                 return {
                     "running": False,
                     "pid": None,
@@ -439,6 +484,7 @@ class LlamaServerManager:
                     "context_size": None,
                     "load_mmproj": None,
                     "web_search": None,
+                    "reasoning_budget": None,
                     "started_at": self._started_at,
                     "process_count": 0,
                     "owned": False,
@@ -460,6 +506,11 @@ class LlamaServerManager:
                 if owned
                 else self._web_search_from_process(process)
             )
+            reasoning_budget = (
+                self._reasoning_budget
+                if owned
+                else self._reasoning_budget_from_process(process)
+            )
             return {
                 "running": True,
                 "pid": process.pid,
@@ -467,6 +518,7 @@ class LlamaServerManager:
                 "context_size": context_size,
                 "load_mmproj": load_mmproj,
                 "web_search": web_search,
+                "reasoning_budget": reasoning_budget,
                 "started_at": self._started_at if owned else None,
                 "process_count": len(matches),
                 "owned": owned,
@@ -478,16 +530,19 @@ class LlamaServerManager:
         context_size: Any = None,
         load_mmproj: Any = None,
         web_search: Any = None,
+        reasoning_budget: Any = None,
     ) -> dict[str, Any]:
         with self._lock:
             selected_context_size = validate_context_size(context_size)
             selected_load_mmproj = validate_load_mmproj(load_mmproj)
             selected_web_search = validate_web_search(web_search)
+            selected_reasoning_budget = validate_reasoning_budget(reasoning_budget)
             command = self.build_command(
                 filename,
                 selected_context_size,
                 selected_load_mmproj,
                 selected_web_search,
+                selected_reasoning_budget,
             )
             matches = self._matching_processes()
             if matches:
@@ -519,6 +574,7 @@ class LlamaServerManager:
             self._context_size = selected_context_size
             self._load_mmproj = selected_load_mmproj
             self._web_search = selected_web_search
+            self._reasoning_budget = selected_reasoning_budget
             self._started_at = utc_now()
             threading.Thread(
                 target=self._capture_output,
@@ -558,6 +614,7 @@ class LlamaServerManager:
                 self._context_size = None
                 self._load_mmproj = None
                 self._web_search = None
+                self._reasoning_budget = None
                 self._started_at = None
                 return self.status()
             for process in matches:
@@ -567,6 +624,7 @@ class LlamaServerManager:
             self._context_size = None
             self._load_mmproj = None
             self._web_search = None
+            self._reasoning_budget = None
             self._started_at = None
             return self.status()
 
@@ -576,6 +634,7 @@ class LlamaServerManager:
         context_size: Any = None,
         load_mmproj: Any = None,
         web_search: Any = None,
+        reasoning_budget: Any = None,
     ) -> dict[str, Any]:
         with self._lock:
             selected = filename or self.status().get("selected_model")
@@ -583,7 +642,9 @@ class LlamaServerManager:
                 raise ValueError("select a model before restarting")
             self._validated_model_path(selected)
             self.stop()
-            return self.start(selected, context_size, load_mmproj, web_search)
+            return self.start(
+                selected, context_size, load_mmproj, web_search, reasoning_budget
+            )
 
     def command_preview(
         self,
@@ -591,9 +652,12 @@ class LlamaServerManager:
         context_size: Any = None,
         load_mmproj: Any = None,
         web_search: Any = None,
+        reasoning_budget: Any = None,
     ) -> str:
         return subprocess.list2cmdline(
-            self.build_command(filename, context_size, load_mmproj, web_search)
+            self.build_command(
+                filename, context_size, load_mmproj, web_search, reasoning_budget
+            )
         )
 
     def logs(self, limit: int = 120) -> list[dict[str, str]]:
@@ -852,6 +916,11 @@ def index() -> str:
             LLAMA_DEFAULT_CONTEXT_SIZE
         ),
         context_sizes=ALLOWED_CONTEXT_SIZES,
+        default_reasoning_budget=LLAMA_DEFAULT_REASONING_BUDGET,
+        default_reasoning_budget_index=ALLOWED_REASONING_BUDGETS.index(
+            LLAMA_DEFAULT_REASONING_BUDGET
+        ),
+        reasoning_budgets=ALLOWED_REASONING_BUDGETS,
         default_load_mmproj=LLAMA_LOAD_MMPROJ_BY_DEFAULT,
         default_web_search=LLAMA_WEB_SEARCH_BY_DEFAULT,
         api_urls={
@@ -891,6 +960,7 @@ def api_start() -> tuple[Response, int] | Response:
             payload.get("context_size"),
             payload.get("load_mmproj"),
             payload.get("web_search"),
+            payload.get("reasoning_budget"),
         )
         return jsonify(status)
     except (ValueError, FileNotFoundError) as exc:
@@ -913,6 +983,7 @@ def api_restart() -> tuple[Response, int] | Response:
             payload.get("context_size"),
             payload.get("load_mmproj"),
             payload.get("web_search"),
+            payload.get("reasoning_budget"),
         )
         return jsonify(status)
     except (ValueError, FileNotFoundError) as exc:
@@ -949,6 +1020,7 @@ def api_command() -> tuple[Response, int] | Response:
         raw_context_size = request.args.get("context_size")
         raw_load_mmproj = request.args.get("load_mmproj")
         raw_web_search = request.args.get("web_search")
+        raw_reasoning_budget = request.args.get("reasoning_budget")
         context_size: Any = None
         if raw_context_size is not None:
             context_size = (
@@ -974,6 +1046,14 @@ def api_command() -> tuple[Response, int] | Response:
                 web_search = False
             else:
                 web_search = raw_web_search
+        reasoning_budget: Any = None
+        if raw_reasoning_budget is not None:
+            reasoning_budget = (
+                int(raw_reasoning_budget)
+                if raw_reasoning_budget.isascii()
+                and raw_reasoning_budget.isdecimal()
+                else raw_reasoning_budget
+            )
         return jsonify(
             {
                 "command": manager.command_preview(
@@ -981,6 +1061,7 @@ def api_command() -> tuple[Response, int] | Response:
                     context_size,
                     load_mmproj,
                     web_search,
+                    reasoning_budget,
                 )
             }
         )
@@ -1034,6 +1115,7 @@ def validate_public_url(value: str, name: str) -> str:
 
 def validate_configuration() -> None:
     validate_context_size(LLAMA_DEFAULT_CONTEXT_SIZE)
+    validate_reasoning_budget(LLAMA_DEFAULT_REASONING_BUDGET)
     validate_web_search_configuration(
         WEB_SEARCH_MAX_RESULTS,
         WEB_SEARCH_TIMEOUT,

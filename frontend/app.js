@@ -8,7 +8,10 @@ const statusLabel = document.getElementById("status-label");
 const logsNode = document.getElementById("logs");
 const contextSizeSlider = document.getElementById("context-size-slider");
 const contextSizeOutput = document.getElementById("context-size-output");
+const reasoningBudgetSlider = document.getElementById("reasoning-budget-slider");
+const reasoningBudgetOutput = document.getElementById("reasoning-budget-output");
 contextSizeSlider.dataset.userModified = "false";
+reasoningBudgetSlider.dataset.userModified = "false";
 
 const metricNodes = {
   cpu_percent: document.getElementById("cpu-value"),
@@ -37,6 +40,7 @@ const persistedMetricKeys = [
   "vram_total_bytes",
 ];
 const contextSizes = window.CONTEXT_SIZES || [16384, 32768, 65536, 131072];
+const reasoningBudgets = window.REASONING_BUDGETS || [1024, 2048, 4096, 8192, 16384];
 const defaultLoadMmproj = window.DEFAULT_LOAD_MMPROJ !== false;
 const defaultWebSearch = window.DEFAULT_WEB_SEARCH !== false;
 let models = [];
@@ -113,6 +117,7 @@ function updateControls() {
   document.getElementById("clear-graphs-button").disabled = busy;
   document.getElementById("clear-logs-button").disabled = busy;
   contextSizeSlider.disabled = busy;
+  reasoningBudgetSlider.disabled = busy;
 }
 
 function syncMmprojControls() {
@@ -162,13 +167,28 @@ function syncContextSizeSlider() {
   }
 }
 
+function syncReasoningBudgetSlider() {
+  if (
+    !latestStatus.running
+    || reasoningBudgetSlider.dataset.userModified === "true"
+  ) {
+    return;
+  }
+  const activeIndex = reasoningBudgets.indexOf(latestStatus.reasoning_budget);
+  if (activeIndex >= 0) {
+    reasoningBudgetSlider.value = String(activeIndex);
+  }
+}
+
 function renderStatus(status) {
   latestStatus = status;
   statusPill.classList.remove("error");
   statusPill.classList.toggle("online", status.running);
   statusLabel.textContent = status.running ? "Server online" : "Server stopped";
   syncContextSizeSlider();
+  syncReasoningBudgetSlider();
   updateContextSizeOutput();
+  updateReasoningBudgetOutput();
   syncMmprojControls();
   syncWebSearchControls();
   updateControls();
@@ -300,6 +320,7 @@ function renderModels() {
           context_size: contextSizes[Number(contextSizeSlider.value)],
           load_mmproj: mmprojToggle ? mmprojToggle.checked : false,
           web_search: webSearchToggle.checked,
+          reasoning_budget: reasoningBudgets[Number(reasoningBudgetSlider.value)],
         },
         "",
       );
@@ -518,11 +539,26 @@ function updateContextSizeOutput() {
     : `${selectedContextSize / 1024}K`;
 }
 
+function updateReasoningBudgetOutput() {
+  const selectedReasoningBudget = reasoningBudgets[Number(reasoningBudgetSlider.value)];
+  const activeReasoningBudget = latestStatus.running
+    ? latestStatus.reasoning_budget
+    : null;
+  reasoningBudgetOutput.value = activeReasoningBudget
+    ? `${activeReasoningBudget / 1024}K in use`
+    : `${selectedReasoningBudget / 1024}K`;
+}
+
 contextSizeSlider.addEventListener("input", () => {
   contextSizeSlider.dataset.userModified = "true";
   updateContextSizeOutput();
 });
+reasoningBudgetSlider.addEventListener("input", () => {
+  reasoningBudgetSlider.dataset.userModified = "true";
+  updateReasoningBudgetOutput();
+});
 updateContextSizeOutput();
+updateReasoningBudgetOutput();
 
 document.getElementById("refresh-button").addEventListener("click", async () => {
   await Promise.all([loadModels(), loadStatus(), loadLogs()]);

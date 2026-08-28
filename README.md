@@ -224,6 +224,9 @@ required and will fail startup if missing.
 | `LLAMA_DEFAULT_CONTEXT_SIZE` | – | Default context size shown in the UI |
 | `LLAMA_MIN_CONTEXT_SIZE` | `16384` | Smallest selectable context size |
 | `LLAMA_MAX_CONTEXT_SIZE` | `131072` | Largest selectable context size |
+| `LLAMA_DEFAULT_REASONING_BUDGET` | `8192` | Default reasoning budget shown in the UI |
+| `LLAMA_MIN_REASONING_BUDGET` | `1024` | Smallest selectable reasoning budget |
+| `LLAMA_MAX_REASONING_BUDGET` | `16384` | Largest selectable reasoning budget |
 | `LLAMA_ALIAS` | – | Model alias passed as `--alias` |
 | `LLAMA_LOAD_MMPROJ_BY_DEFAULT` | `true` | Load MMPROJ by default in the UI |
 | `LLAMA_WEB_SEARCH_BY_DEFAULT` | `true` | Enable Web Search by default in the UI |
@@ -267,7 +270,7 @@ llama-server -m <model> [-c <context>]
   [-ngl N]                           when LLAMA_GPU_LAYERS>0 (0–999)
   [--cache-type-k q4_0|q8_0]         when LLAMA_KV_CACHE_TYPE_K is 4/8
   [--cache-type-v q4_0|q8_0]         when LLAMA_KV_CACHE_TYPE_V is 4/8
-  --reasoning off --reasoning-budget 0
+  --reasoning-budget N
   [--cache-reuse N]                  when LLAMA_CACHE_REUSE>0
   --alias <alias>
   [--cors-origins <origins>]         when LLAMA_CORS_ORIGINS is set

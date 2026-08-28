@@ -60,6 +60,32 @@
           {% endfor %}
         </div>
       </div>
+      <div class="context-control">
+        <div class="context-control-heading">
+          <label for="reasoning-budget-slider">Reasoning budget</label>
+          <output id="reasoning-budget-output" for="reasoning-budget-slider">{{ default_reasoning_budget // 1024 }}K</output>
+        </div>
+        <input
+          id="reasoning-budget-slider"
+          type="range"
+          min="0"
+          max="{{ reasoning_budgets | length - 1 }}"
+          step="1"
+          value="{{ default_reasoning_budget_index }}"
+          list="reasoning-budget-marks"
+          aria-describedby="reasoning-budget-help"
+        >
+        <datalist id="reasoning-budget-marks">
+          {% for budget in reasoning_budgets %}
+          <option value="{{ loop.index0 }}" label="{{ budget // 1024 }}K"></option>
+          {% endfor %}
+        </datalist>
+        <div class="context-range-labels" aria-hidden="true">
+          {% for budget in reasoning_budgets %}
+          <span>{{ budget // 1024 }}K</span>
+          {% endfor %}
+        </div>
+      </div>
     </section>
 
     <section class="panel usage-panel">
@@ -174,6 +200,7 @@
 
   </main>
   <script>window.CONTEXT_SIZES = {{ context_sizes | tojson }};
+    window.REASONING_BUDGETS = {{ reasoning_budgets | tojson }};
     window.DEFAULT_LOAD_MMPROJ = {{ default_load_mmproj | tojson }};
     window.DEFAULT_WEB_SEARCH = {{ default_web_search | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>

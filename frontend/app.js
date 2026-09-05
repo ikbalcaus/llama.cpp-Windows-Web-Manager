@@ -43,12 +43,14 @@ const contextSizes = window.CONTEXT_SIZES || [16384, 32768, 65536, 131072];
 const reasoningBudgets = window.REASONING_BUDGETS || [1024, 2048, 4096, 8192, 16384];
 const defaultLoadMmproj = window.DEFAULT_LOAD_MMPROJ !== false;
 const defaultWebSearch = window.DEFAULT_WEB_SEARCH !== false;
+const defaultUseMtp = window.DEFAULT_USE_MTP !== false;
 let models = [];
 let latestStatus = {
   running: false,
   selected_model: null,
   load_mmproj: null,
   web_search: null,
+  use_mtp: null,
 };
 let busy = false;
 let logsPointerActive = false;
@@ -110,6 +112,9 @@ function updateControls() {
   document.querySelectorAll("[data-web-search]").forEach((checkbox) => {
     checkbox.disabled = busy;
   });
+  document.querySelectorAll("[data-use-mtp]").forEach((checkbox) => {
+    checkbox.disabled = busy;
+  });
   document.querySelectorAll(".model-card").forEach((card) => {
     card.classList.toggle("loaded", isLoaded(card.dataset.model));
   });
@@ -154,6 +159,23 @@ function syncWebSearchControls() {
   });
 }
 
+function syncMtpControls() {
+  if (
+    !latestStatus.running
+    || typeof latestStatus.use_mtp !== "boolean"
+  ) {
+    return;
+  }
+  document.querySelectorAll("[data-use-mtp]").forEach((checkbox) => {
+    if (
+      checkbox.dataset.useMtp === latestStatus.selected_model
+      && checkbox.dataset.userModified !== "true"
+    ) {
+      checkbox.checked = latestStatus.use_mtp;
+    }
+  });
+}
+
 function syncContextSizeSlider() {
   if (
     !latestStatus.running
@@ -191,6 +213,7 @@ function renderStatus(status) {
   updateReasoningBudgetOutput();
   syncMmprojControls();
   syncWebSearchControls();
+  syncMtpControls();
   updateControls();
 }
 
@@ -298,6 +321,39 @@ function renderModels() {
     webSearchControl.append(webSearchToggle, webSearchLabel, webSearchTrack);
     featureToggles.append(webSearchControl);
 
+    let mtpToggle = null;
+    if (model.uses_mtp) {
+      actions.classList.add("has-mtp");
+      const mtpControl = document.createElement("label");
+      mtpControl.className = "mmproj-toggle mtp-toggle";
+      mtpToggle = document.createElement("input");
+      mtpToggle.type = "checkbox";
+      mtpToggle.checked = (
+        isLoaded(model.filename)
+        && typeof latestStatus.use_mtp === "boolean"
+      )
+        ? latestStatus.use_mtp
+        : defaultUseMtp;
+      mtpToggle.dataset.useMtp = model.filename;
+      mtpToggle.dataset.userModified = "false";
+      mtpToggle.addEventListener("change", () => {
+        mtpToggle.dataset.userModified = "true";
+      });
+      mtpToggle.setAttribute(
+        "aria-label",
+        `Enable MTP for ${model.name}`,
+      );
+      const mtpTrack = document.createElement("span");
+      mtpTrack.className = "switch-track";
+      mtpTrack.setAttribute("aria-hidden", "true");
+      const mtpLabel = document.createElement("span");
+      mtpLabel.className = "switch-label";
+      mtpLabel.textContent = "MTP";
+      mtpControl.title = "Enable MTP";
+      mtpControl.append(mtpToggle, mtpLabel, mtpTrack);
+      featureToggles.append(mtpControl);
+    }
+
     const unload = document.createElement("button");
     unload.type = "button";
     unload.className = "button danger";
@@ -320,6 +376,7 @@ function renderModels() {
           context_size: contextSizes[Number(contextSizeSlider.value)],
           load_mmproj: mmprojToggle ? mmprojToggle.checked : false,
           web_search: webSearchToggle.checked,
+          use_mtp: mtpToggle ? mtpToggle.checked : false,
           reasoning_budget: reasoningBudgets[Number(reasoningBudgetSlider.value)],
         },
         "",

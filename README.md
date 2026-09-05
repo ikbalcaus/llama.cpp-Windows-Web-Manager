@@ -9,7 +9,9 @@ optional free Cloudflare Tunnel for public access.
 ## Features
 
 - **Model manager** – load, stop, and restart GGUF models from a web UI, with
-  automatic pairing of MTP draft models and multimodal projection (`mmproj`) files.
+  per-model toggles for vision (`mmproj`), web search, and MTP speculative
+  decoding, plus automatic pairing of MTP draft models and multimodal
+  projection (`mmproj`) files.
 - **Flexible context sizes** – choose from context sizes generated between
   `LLAMA_MIN_CONTEXT_SIZE` and `LLAMA_MAX_CONTEXT_SIZE` (power-of-two steps).
 - **Performance tuning** – flash attention, quantized KV cache, and KV-cache
@@ -191,7 +193,10 @@ MTP can come from two sources:
   hidden from the model list, and the main card launches with
   `--model-draft model-name-mtp.gguf` followed by the same `--spec-type` flags.
 
-In both cases the model card shows the `MTP` feature badge.
+In both cases the model card shows the `MTP` feature badge. MTP is enabled by
+default for models that support it. Use the `MTP` toggle on the model card (or
+pass `"use_mtp": false` in the API) to disable speculative decoding and launch
+without the `--model-draft` / `--spec-type` flags.
 
 ## Web search and research agent
 
@@ -230,6 +235,7 @@ required and will fail startup if missing.
 | `LLAMA_ALIAS` | – | Model alias passed as `--alias` |
 | `LLAMA_LOAD_MMPROJ_BY_DEFAULT` | `true` | Load MMPROJ by default in the UI |
 | `LLAMA_WEB_SEARCH_BY_DEFAULT` | `true` | Enable Web Search by default in the UI |
+| `LLAMA_MTP_BY_DEFAULT` | `true` | Enable MTP by default in the UI |
 | `LLAMA_MTP_SPEC_TYPE` | – | Spec type for MTP, e.g. `draft-mtp` |
 | `LLAMA_MTP_DRAFT_N_MAX` | – | `--spec-draft-n-max` value |
 | `LLAMA_NO_MMPROJ_OFFLOAD` | – | Adds `--no-mmproj-offload` when `true` |
@@ -281,8 +287,8 @@ llama-server -m <model> [-c <context>]
   --alias <alias>
   [--cors-origins <origins>]         when LLAMA_CORS_ORIGINS is set
   --host 0.0.0.0 --port 8080
-  [--model-draft <draft>]            when an MTP draft file exists
-  [--spec-type draft-mtp --spec-draft-n-max N]
+  [--model-draft <draft>]            when MTP enabled and a draft file exists
+  [--spec-type draft-mtp --spec-draft-n-max N]  when MTP enabled and the model supports it
   [--jinja --ui-mcp-proxy --mcp-servers-json ... --ui-config ...]  when web search enabled
 ```
 
@@ -297,10 +303,10 @@ unexpected errors.
 | `GET` | `/health` | Liveness probe |
 | `GET` | `/api/models` | List loadable models |
 | `GET` | `/api/status` | Current model process state |
-| `POST` | `/api/start` | Load or reload with `model`, optional `context_size`, `load_mmproj`, `web_search` |
+| `POST` | `/api/start` | Load or reload with `model`, optional `context_size`, `load_mmproj`, `web_search`, `use_mtp` |
 | `POST` | `/api/stop` | Unload the current model |
-| `POST` | `/api/restart` | Restart with optional `context_size`, `load_mmproj`, `web_search` |
-| `GET` | `/api/command?model=name.gguf&context_size=16384&load_mmproj=true&web_search=false` | Safe command preview |
+| `POST` | `/api/restart` | Restart with optional `context_size`, `load_mmproj`, `web_search`, `use_mtp` |
+| `GET` | `/api/command?model=name.gguf&context_size=16384&load_mmproj=true&web_search=false&use_mtp=false` | Safe command preview |
 | `GET` | `/api/metrics` | CPU, RAM, GPU, and VRAM sample |
 | `GET` | `/api/logs?limit=120` | Recent in-memory llama-server output |
 | `POST` | `/api/logs/clear` | Clear the website console |

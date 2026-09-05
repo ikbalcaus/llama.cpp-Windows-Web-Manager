@@ -322,8 +322,6 @@ h1 {
 }
 
 .feature-toggles .mmproj-toggle {
-  width: 100%;
-  justify-content: flex-end;
   margin-right: 0;
 }
 

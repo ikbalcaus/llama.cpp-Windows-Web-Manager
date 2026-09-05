@@ -109,6 +109,10 @@ LLAMA_WEB_SEARCH_BY_DEFAULT = (
     os.environ.get("LLAMA_WEB_SEARCH_BY_DEFAULT", "true").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+LLAMA_MTP_BY_DEFAULT = (
+    os.environ.get("LLAMA_MTP_BY_DEFAULT", "true").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 QUANTIZATION_RE = re.compile(r"(?i)^q[0-9]+$")
 TRAY_TOOLTIP = os.environ["TRAY_TOOLTIP"].strip()
 WEB_SEARCH_MAX_RESULTS = int(
@@ -207,6 +211,14 @@ def validate_web_search(value: Any) -> bool:
     return value
 
 
+def validate_use_mtp(value: Any) -> bool:
+    if value is None:
+        return LLAMA_MTP_BY_DEFAULT
+    if not isinstance(value, bool):
+        raise ValueError("use_mtp must be a boolean")
+    return value
+
+
 def validate_reasoning_budget(value: Any) -> int:
     if value is None:
         value = LLAMA_DEFAULT_REASONING_BUDGET
@@ -227,6 +239,7 @@ class LlamaServerManager:
         self._context_size: int | None = None
         self._load_mmproj: bool | None = None
         self._web_search: bool | None = None
+        self._use_mtp: bool | None = None
         self._reasoning_budget: int | None = None
         self._started_at: str | None = None
         self._logs: deque[dict[str, str]] = deque(maxlen=WEB_LOG_LINES)
@@ -318,6 +331,7 @@ class LlamaServerManager:
         context_size: Any = None,
         load_mmproj: Any = None,
         web_search: Any = None,
+        use_mtp: Any = None,
         reasoning_budget: Any = None,
     ) -> list[str]:
         model_path = self._validated_model_path(filename)
@@ -325,6 +339,7 @@ class LlamaServerManager:
         selected_reasoning_budget = validate_reasoning_budget(reasoning_budget)
         should_load_mmproj = validate_load_mmproj(load_mmproj)
         should_enable_web_search = validate_web_search(web_search)
+        should_use_mtp = validate_use_mtp(use_mtp)
         if not self.executable.is_file():
             raise FileNotFoundError(f"llama-server executable not found: {self.executable}")
         command = [
@@ -367,17 +382,18 @@ class LlamaServerManager:
             command.extend(["--cors-origins", LLAMA_CORS_ORIGINS])
         command.extend(["--host", LLAMA_HOST, "--port", str(LLAMA_PORT)])
         mtp_draft_path = self._mtp_draft_path_for(model_path)
-        if mtp_draft_path is not None:
-            command.extend(["--model-draft", str(mtp_draft_path)])
-        if "mtp" in model_path.name.lower() or mtp_draft_path is not None:
-            command.extend(
-                [
-                    "--spec-type",
-                    LLAMA_MTP_SPEC_TYPE,
-                    "--spec-draft-n-max",
-                    str(LLAMA_MTP_DRAFT_N_MAX),
-                ]
-            )
+        if should_use_mtp:
+            if mtp_draft_path is not None:
+                command.extend(["--model-draft", str(mtp_draft_path)])
+            if "mtp" in model_path.name.lower() or mtp_draft_path is not None:
+                command.extend(
+                    [
+                        "--spec-type",
+                        LLAMA_MTP_SPEC_TYPE,
+                        "--spec-draft-n-max",
+                        str(LLAMA_MTP_DRAFT_N_MAX),
+                    ]
+                )
         web_search_arguments = build_web_search_arguments(
             should_enable_web_search,
             WEB_SEARCH_MAX_RESULTS,
@@ -441,6 +457,13 @@ class LlamaServerManager:
             return None
         return "--mcp-servers-json" in arguments
 
+    def _use_mtp_from_process(self, process: psutil.Process) -> bool | None:
+        try:
+            arguments = process.cmdline()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            return None
+        return "--model-draft" in arguments or "--spec-type" in arguments
+
     def _reasoning_budget_from_process(self, process: psutil.Process) -> int | None:
         try:
             arguments = process.cmdline()
@@ -491,6 +514,7 @@ class LlamaServerManager:
                 self._context_size = None
                 self._load_mmproj = None
                 self._web_search = None
+                self._use_mtp = None
                 self._reasoning_budget = None
                 return {
                     "running": False,
@@ -499,6 +523,7 @@ class LlamaServerManager:
                     "context_size": None,
                     "load_mmproj": None,
                     "web_search": None,
+                    "use_mtp": None,
                     "reasoning_budget": None,
                     "started_at": self._started_at,
                     "process_count": 0,
@@ -521,6 +546,11 @@ class LlamaServerManager:
                 if owned
                 else self._web_search_from_process(process)
             )
+            use_mtp = (
+                self._use_mtp
+                if owned
+                else self._use_mtp_from_process(process)
+            )
             reasoning_budget = (
                 self._reasoning_budget
                 if owned
@@ -533,6 +563,7 @@ class LlamaServerManager:
                 "context_size": context_size,
                 "load_mmproj": load_mmproj,
                 "web_search": web_search,
+                "use_mtp": use_mtp,
                 "reasoning_budget": reasoning_budget,
                 "started_at": self._started_at if owned else None,
                 "process_count": len(matches),
@@ -545,18 +576,21 @@ class LlamaServerManager:
         context_size: Any = None,
         load_mmproj: Any = None,
         web_search: Any = None,
+        use_mtp: Any = None,
         reasoning_budget: Any = None,
     ) -> dict[str, Any]:
         with self._lock:
             selected_context_size = validate_context_size(context_size)
             selected_load_mmproj = validate_load_mmproj(load_mmproj)
             selected_web_search = validate_web_search(web_search)
+            selected_use_mtp = validate_use_mtp(use_mtp)
             selected_reasoning_budget = validate_reasoning_budget(reasoning_budget)
             command = self.build_command(
                 filename,
                 selected_context_size,
                 selected_load_mmproj,
                 selected_web_search,
+                selected_use_mtp,
                 selected_reasoning_budget,
             )
             matches = self._matching_processes()
@@ -589,6 +623,7 @@ class LlamaServerManager:
             self._context_size = selected_context_size
             self._load_mmproj = selected_load_mmproj
             self._web_search = selected_web_search
+            self._use_mtp = selected_use_mtp
             self._reasoning_budget = selected_reasoning_budget
             self._started_at = utc_now()
             threading.Thread(
@@ -629,6 +664,7 @@ class LlamaServerManager:
                 self._context_size = None
                 self._load_mmproj = None
                 self._web_search = None
+                self._use_mtp = None
                 self._reasoning_budget = None
                 self._started_at = None
                 return self.status()
@@ -639,6 +675,7 @@ class LlamaServerManager:
             self._context_size = None
             self._load_mmproj = None
             self._web_search = None
+            self._use_mtp = None
             self._reasoning_budget = None
             self._started_at = None
             return self.status()
@@ -649,6 +686,7 @@ class LlamaServerManager:
         context_size: Any = None,
         load_mmproj: Any = None,
         web_search: Any = None,
+        use_mtp: Any = None,
         reasoning_budget: Any = None,
     ) -> dict[str, Any]:
         with self._lock:
@@ -658,7 +696,12 @@ class LlamaServerManager:
             self._validated_model_path(selected)
             self.stop()
             return self.start(
-                selected, context_size, load_mmproj, web_search, reasoning_budget
+                selected,
+                context_size,
+                load_mmproj,
+                web_search,
+                use_mtp,
+                reasoning_budget,
             )
 
     def command_preview(
@@ -667,11 +710,17 @@ class LlamaServerManager:
         context_size: Any = None,
         load_mmproj: Any = None,
         web_search: Any = None,
+        use_mtp: Any = None,
         reasoning_budget: Any = None,
     ) -> str:
         return subprocess.list2cmdline(
             self.build_command(
-                filename, context_size, load_mmproj, web_search, reasoning_budget
+                filename,
+                context_size,
+                load_mmproj,
+                web_search,
+                use_mtp,
+                reasoning_budget,
             )
         )
 
@@ -938,6 +987,7 @@ def index() -> str:
         reasoning_budgets=ALLOWED_REASONING_BUDGETS,
         default_load_mmproj=LLAMA_LOAD_MMPROJ_BY_DEFAULT,
         default_web_search=LLAMA_WEB_SEARCH_BY_DEFAULT,
+        default_use_mtp=LLAMA_MTP_BY_DEFAULT,
         api_urls={
             "models": url_for("api_models"),
             "status": url_for("api_status"),
@@ -975,6 +1025,7 @@ def api_start() -> tuple[Response, int] | Response:
             payload.get("context_size"),
             payload.get("load_mmproj"),
             payload.get("web_search"),
+            payload.get("use_mtp"),
             payload.get("reasoning_budget"),
         )
         return jsonify(status)
@@ -998,6 +1049,7 @@ def api_restart() -> tuple[Response, int] | Response:
             payload.get("context_size"),
             payload.get("load_mmproj"),
             payload.get("web_search"),
+            payload.get("use_mtp"),
             payload.get("reasoning_budget"),
         )
         return jsonify(status)
@@ -1035,6 +1087,7 @@ def api_command() -> tuple[Response, int] | Response:
         raw_context_size = request.args.get("context_size")
         raw_load_mmproj = request.args.get("load_mmproj")
         raw_web_search = request.args.get("web_search")
+        raw_use_mtp = request.args.get("use_mtp")
         raw_reasoning_budget = request.args.get("reasoning_budget")
         context_size: Any = None
         if raw_context_size is not None:
@@ -1061,6 +1114,15 @@ def api_command() -> tuple[Response, int] | Response:
                 web_search = False
             else:
                 web_search = raw_web_search
+        use_mtp: Any = None
+        if raw_use_mtp is not None:
+            lowered = raw_use_mtp.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                use_mtp = True
+            elif lowered in {"0", "false", "no", "off"}:
+                use_mtp = False
+            else:
+                use_mtp = raw_use_mtp
         reasoning_budget: Any = None
         if raw_reasoning_budget is not None:
             reasoning_budget = (
@@ -1076,6 +1138,7 @@ def api_command() -> tuple[Response, int] | Response:
                     context_size,
                     load_mmproj,
                     web_search,
+                    use_mtp,
                     reasoning_budget,
                 )
             }

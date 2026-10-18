@@ -3,8 +3,8 @@
 ![llama.cpp Windows Web Manager](llama.cpp-windows-web-manager.png)
 
 A Windows tray application that runs [llama.cpp](https://github.com/ggml-org/llama.cpp)
-`llama-server` behind a management web UI, with Caddy as the reverse proxy and an
-optional free Cloudflare Tunnel for public access.
+`llama-server` behind a management web UI, with Caddy as the reverse proxy and
+optional Tailscale Serve or Funnel for remote access.
 
 ## Features
 
@@ -20,8 +20,8 @@ optional free Cloudflare Tunnel for public access.
   DuckDuckGo and safe, public-only URL fetching.
 - **Reverse proxy** – Caddy exposes llama.cpp (`/8080/`) and the management UI
   (`/8081/`) on a single port.
-- **Public access** – optional Cloudflare Tunnel (`cloudflared`) exposes your
-  localhost on the public web for free.
+- **Remote access** – optional Tailscale Serve (tailnet-only) or Tailscale
+  Funnel (public internet) exposes Caddy over HTTPS without port forwarding.
 - **System tray** – starts minimized, clean shutdown of every child process.
 
 ## Architecture
@@ -35,7 +35,7 @@ Everything runs from a single entry point, `app.py`:
   llama-server ─────┤  model process (0.0.0.0:8080)               │
                     │  management UI (Waitress/Flask 0.0.0.0:8081)│
                     │  reverse proxy  (Caddy 0.0.0.0:8082)        │
-                    │  public tunnel  (cloudflared, optional)     │
+                    │  remote access  (tailscale, optional)       │
                     └─────────────────────────────────────────────┘
 ```
 
@@ -44,14 +44,14 @@ Everything runs from a single entry point, `app.py`:
 - Waitress/Flask on `0.0.0.0:8081` – the management web UI and REST API.
 - Caddy on `0.0.0.0:8082` – single entry point; `/8080/` proxies to llama.cpp,
   `/8081/` to the management UI.
-- `cloudflared` – started only when `ENABLE_CLOUDFLARE_TUNNEL=true`, forwarding
-  a public hostname to Caddy.
+- `tailscale` – started only when `ENABLE_TAILSCALE=true`, forwarding the
+  tailnet or public HTTPS URL to Caddy.
 
-When the Cloudflare Tunnel is enabled the public routes are:
+When Tailscale is enabled the routes are:
 
 ```text
-{CLOUDFLARE_TUNNEL_URL}/8080/  -> llama.cpp
-{CLOUDFLARE_TUNNEL_URL}/8081/  -> management UI
+https://<machine>.<tailnet>.ts.net/8080/  -> llama.cpp
+https://<machine>.<tailnet>.ts.net/8081/  -> management UI
 ```
 
 ## Requirements
@@ -59,7 +59,7 @@ When the Cloudflare Tunnel is enabled the public routes are:
 - Windows with **Python 3.11+** (`py -3.11` in the instructions below).
 - `llama-server.exe` (from a llama.cpp release, e.g. CUDA build).
 - `caddy.exe` (single static binary from <https://caddyserver.com/download>).
-- `cloudflared.exe` – only if you want the public tunnel.
+- Tailscale (the Windows client) – only if you want remote access.
 - A `models` folder containing GGUF files.
 
 ## Windows setup
@@ -94,8 +94,8 @@ On Windows this starts a notification-area icon:
 
 - **Double-click** – open the settings page.
 - **Right-click** – open Settings, open the llama.cpp UI, or choose **Exit**.
-- **Exit** cleanly stops Waitress, Caddy, the Cloudflare Tunnel (when enabled),
-  and any llama-server process loaded by the UI.
+- **Exit** cleanly stops Waitress, Caddy, the Tailscale Serve/Funnel endpoint
+  (when enabled), and any llama-server process loaded by the UI.
 
 To start minimized without a PowerShell window (e.g. from a desktop or
 Startup-folder shortcut):
@@ -118,52 +118,65 @@ In console-only mode, `Ctrl+C` performs the same clean shutdown.
 ### Process and log behavior
 
 Child executables are started with `CREATE_NO_WINDOW` (no console windows). Caddy
-and an enabled Cloudflare Tunnel write their output to nowhere; llama-server
-output is kept only in bounded in-memory buffers for the website console. It is
-never printed by `app.py` and never written to a log file. The startup URL
-announcements are printed only when a console is present.
+and an enabled Tailscale Serve/Funnel endpoint write their output to nowhere;
+llama-server output is kept only in bounded in-memory buffers for the website
+console. It is never printed by `app.py` and never written to a log file. The
+startup URL announcements are printed only when a console is present.
 
-## Public access with Cloudflare Tunnel
+## Remote access with Tailscale
 
-The tunnel is free, needs no inbound firewall port, and is disabled by default:
+Tailscale creates a private network between your devices (a tailnet) without
+opening inbound firewall ports. `app.py` starts `tailscale serve` (tailnet-only)
+or `tailscale funnel` (public internet) and points it at Caddy. The feature is
+disabled by default:
 
 ```dotenv
-ENABLE_CLOUDFLARE_TUNNEL=false
+ENABLE_TAILSCALE=false
 ```
 
-### Named tunnel (recommended, fixed hostname)
+### Setup
 
-1. Create a tunnel in the Cloudflare Zero Trust dashboard
-   (<https://one.dash.cloudflare.com> → Networks → Tunnels).
-2. On the tunnel's overview page choose **Add a replica** to reveal the
-   installation command, and copy the `eyJ...` token.
-3. Configure a public hostname for the tunnel pointing to
-   `http://localhost:{CADDY_PORT}` (8082 by default).
-4. Set these in `.env`:
+1. Install the Tailscale Windows client from <https://tailscale.com/download>
+   and sign in (`tailscale up`).
+2. Enable HTTPS certificates for your tailnet in the admin console
+   (<https://login.tailscale.com/admin/dns>) so Serve/Funnel can provision a
+   certificate.
+3. Set these in `.env`:
 
    ```dotenv
-   ENABLE_CLOUDFLARE_TUNNEL=true
-   CLOUDFLARE_TUNNEL_URL=https://your-hostname.example.com
-   CLOUDFLARE_TUNNEL_TOKEN=your_eyJ_token
+   ENABLE_TAILSCALE=true
+   TAILSCALE_MODE=serve
+   TAILSCALE_HTTPS_PORT=443
    ```
 
-`cloudflared.exe` is resolved from `CLOUDFLARE_TUNNEL_PATH`, the project
-directory, or `PATH`. The token is passed to `cloudflared` through the
-`TUNNEL_TOKEN` environment variable, so it never appears in the process command
-line. Never publish the token.
+4. Start the app as usual. The console and startup log print the HTTPS URL, for
+   example `https://my-pc.example-tailnet.ts.net/8081/`.
 
-### Quick tunnel (no account, random URL)
+`tailscale.exe` is resolved from `TAILSCALE_PATH`, the project directory,
+`PATH`, or the default install location
+`C:\Program Files\Tailscale\tailscale.exe`.
 
-If you just want to test public access without an account, install `cloudflared`
-and run it manually alongside the manager:
+### Serve vs Funnel
 
-```powershell
-cloudflared tunnel --url http://127.0.0.1:8082
+- `TAILSCALE_MODE=serve` (default) – reachable only by devices signed in to your
+  tailnet. Nothing is exposed to the public internet.
+- `TAILSCALE_MODE=funnel` – reachable from the public internet. Funnel is limited
+  to HTTPS ports `443`, `8443`, or `10000`, and Funnel must be allowed by your
+  tailnet policy.
+
+Both modes proxy the same Caddy routes:
+
+```text
+https://<machine>.<tailnet>.ts.net/8080/  -> llama.cpp
+https://<machine>.<tailnet>.ts.net/8081/  -> management UI
 ```
 
-It prints a random `https://*.trycloudflare.com` URL. Any hostname-based
-tunneling needs Caddy running, so keep `app.py` running too. This mode is not
-launched by `app.py`; it is a manual alternative to the named tunnel.
+The HTTPS URL is detected automatically from `tailscale status --json`. If the
+startup log says the URL could not be determined, make sure the Tailscale client
+is signed in and `tailscale status` reports `Running`.
+
+`tailscale serve`/`funnel` runs in the foreground under `app.py`, so it stops
+when the app exits instead of leaving a persistent background configuration.
 
 ## Model management
 
@@ -256,10 +269,10 @@ required and will fail startup if missing.
 | `CADDY_PATH` | `<project>/caddy.exe` | Caddy executable |
 | `CADDYFILE_PATH` | `<project>/Caddyfile` | Caddy configuration |
 | `CADDY_PORT` | `8082` | Caddy bind port |
-| `ENABLE_CLOUDFLARE_TUNNEL` | `false` | Start `cloudflared tunnel run` when `true` |
-| `CLOUDFLARE_TUNNEL_PATH` | *(auto)* | Path to `cloudflared.exe` |
-| `CLOUDFLARE_TUNNEL_URL` | *(empty)* | Public base URL, e.g. `https://llm.example.com` |
-| `CLOUDFLARE_TUNNEL_TOKEN` | *(empty)* | Remote tunnel token (`eyJ...`) |
+| `ENABLE_TAILSCALE` | `false` | Start `tailscale serve`/`funnel` when `true` |
+| `TAILSCALE_PATH` | *(auto)* | Path to `tailscale.exe` |
+| `TAILSCALE_MODE` | `serve` | `serve` (tailnet-only) or `funnel` (public) |
+| `TAILSCALE_HTTPS_PORT` | `443` | HTTPS port exposed by Tailscale |
 | `WEB_SEARCH_MAX_RESULTS` | `5` | Max results per search (1–20) |
 | `WEB_SEARCH_TIMEOUT` | `15` | Per-request timeout in seconds (1–120) |
 | `WEB_FETCH_MAX_CHARS` | `30000` | Max characters extracted per URL (2000–100000) |
@@ -324,19 +337,25 @@ filenames, and absolute paths.
 - **`--cors-origins *` security warning** – llama-server warns when CORS allows
   all origins without an API key. For LAN or public use, either restrict
   `LLAMA_CORS_ORIGINS` to a specific origin or set an API key on llama-server.
-- **Tunnel does not connect** – make sure `CLOUDFLARE_TUNNEL_TOKEN` is the full
-  `eyJ...` token from the dashboard, the tunnel's public hostname points to
-  `http://localhost:8082`, and `cloudflared.exe` is found.
+- **Tailscale URL not shown** – make sure the Tailscale client is installed and
+  signed in, HTTPS certificates are enabled for the tailnet, and
+  `tailscale status` reports `Running`.
+- **Tailscale Serve/Funnel does not start** – run `tailscale serve status` (or
+  `tailscale funnel status`) to inspect existing configuration, confirm
+  `TAILSCALE_MODE`, and for Funnel use port 443, 8443, or 10000.
 - **Port conflicts** – llama-server, Flask, and Caddy use 8080, 8081, and 8082.
-  Change them together in `.env` and keep `CADDY_PORT` aligned with the tunnel's
-  public hostname target.
+  Change them together in `.env`; Caddy reads the same variables, and Tailscale
+  always targets `CADDY_PORT`.
 - **Model not listed** – verify the file is a `.gguf` under `MODELS_DIR` and is
   not a `-mtp` draft or `-mmproj` projection file (those are intentionally
   hidden and attached to their main model).
 
 ## Security notes
 
-- Never publish `CLOUDFLARE_TUNNEL_TOKEN` or any credentials stored in `.env`.
+- Never publish credentials stored in `.env`.
+- Tailscale Funnel exposes llama.cpp and the management UI to the entire
+  internet. Prefer `TAILSCALE_MODE=serve` for tailnet-only access, and consider
+  restricting `LLAMA_CORS_ORIGINS` and enabling an API key.
 - `fetch_url` blocks local and private-network addresses by design.
 - Responses include `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, and `Referrer-Policy: same-origin`.

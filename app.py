@@ -4,6 +4,7 @@ import atexit
 import csv
 import io
 import ipaddress
+import json
 import os
 import re
 import shutil
@@ -56,11 +57,12 @@ LLAMA_PORT = int(os.environ["LLAMA_PORT"])
 FLASK_HOST = os.environ["FLASK_HOST"]
 FLASK_PORT = int(os.environ["FLASK_PORT"])
 CADDY_PORT = int(os.environ["CADDY_PORT"])
-ENABLE_CLOUDFLARE_TUNNEL = os.environ.get(
-    "ENABLE_CLOUDFLARE_TUNNEL", "false"
+ENABLE_TAILSCALE = os.environ.get(
+    "ENABLE_TAILSCALE", "false"
 ).strip().lower() in {"1", "true", "yes", "on"}
-CLOUDFLARE_TUNNEL_TOKEN = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "").strip()
-CLOUDFLARE_TUNNEL_URL = os.environ.get("CLOUDFLARE_TUNNEL_URL", "").strip()
+TAILSCALE_MODE = os.environ.get("TAILSCALE_MODE", "serve").strip().lower()
+TAILSCALE_HTTPS_PORT = int(os.environ.get("TAILSCALE_HTTPS_PORT", "443"))
+TAILSCALE_FUNNEL_PORTS = frozenset({443, 8443, 10000})
 LLAMA_DEFAULT_CONTEXT_SIZE = int(os.environ["LLAMA_DEFAULT_CONTEXT_SIZE"])
 LLAMA_MIN_CONTEXT_SIZE = int(os.environ.get("LLAMA_MIN_CONTEXT_SIZE", "16384"))
 LLAMA_MAX_CONTEXT_SIZE = int(os.environ.get("LLAMA_MAX_CONTEXT_SIZE", "131072"))
@@ -1164,31 +1166,24 @@ def unhandled_error(exc: Exception) -> tuple[Response, int]:
     return jsonify({"error": "internal server error"}), 500
 
 
-def resolve_cloudflared_path() -> Path:
-    override = os.environ.get("CLOUDFLARE_TUNNEL_PATH", "").strip()
+def resolve_tailscale_path() -> Path:
+    override = os.environ.get("TAILSCALE_PATH", "").strip()
     if override:
         return Path(override).expanduser().resolve()
-    local_path = (PROJECT_DIR / "cloudflared.exe").resolve()
+    local_path = (PROJECT_DIR / "tailscale.exe").resolve()
     if local_path.is_file():
         return local_path
-    discovered = shutil.which("cloudflared")
-    return Path(discovered).resolve() if discovered else local_path
-
-
-def validate_public_url(value: str, name: str) -> str:
-    hostname = value.strip().split("://", 1)[-1].split("/", 1)[0]
-    labels = hostname.lower().split(".")
-    if (
-        not labels
-        or any(not label or len(label) > 63 for label in labels)
-        or any(label.startswith("-") or label.endswith("-") for label in labels)
-        or any(
-            not all(character.isalnum() or character == "-" for character in label)
-            for label in labels
-        )
+    discovered = shutil.which("tailscale")
+    if discovered:
+        return Path(discovered).resolve()
+    for program_files in (
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
     ):
-        raise ValueError(f"{name} must be a valid public URL")
-    return hostname
+        candidate = Path(program_files) / "Tailscale" / "tailscale.exe"
+        if candidate.is_file():
+            return candidate.resolve()
+    return local_path
 
 
 def validate_configuration() -> None:
@@ -1207,17 +1202,26 @@ def validate_configuration() -> None:
     ):
         if not 1 <= port <= 65535:
             raise ValueError(f"{name} must be between 1 and 65535")
-    if ENABLE_CLOUDFLARE_TUNNEL:
-        validate_public_url(CLOUDFLARE_TUNNEL_URL, "CLOUDFLARE_TUNNEL_URL")
-        if not CLOUDFLARE_TUNNEL_TOKEN:
-            raise ValueError("CLOUDFLARE_TUNNEL_TOKEN must be set when the tunnel is enabled")
+    if ENABLE_TAILSCALE:
+        if TAILSCALE_MODE not in {"serve", "funnel"}:
+            raise ValueError("TAILSCALE_MODE must be either: serve, funnel")
+        if not 1 <= TAILSCALE_HTTPS_PORT <= 65535:
+            raise ValueError("TAILSCALE_HTTPS_PORT must be between 1 and 65535")
+        if (
+            TAILSCALE_MODE == "funnel"
+            and TAILSCALE_HTTPS_PORT not in TAILSCALE_FUNNEL_PORTS
+        ):
+            raise ValueError(
+                "TAILSCALE_HTTPS_PORT must be one of 443, 8443, or 10000 "
+                "when TAILSCALE_MODE=funnel"
+            )
     required = {
         "LLAMA_SERVER_PATH": LLAMA_SERVER_PATH,
         "CADDY_PATH": CADDY_PATH,
         "CADDYFILE_PATH": CADDYFILE_PATH,
     }
-    if ENABLE_CLOUDFLARE_TUNNEL:
-        required["CLOUDFLARE_TUNNEL_PATH"] = resolve_cloudflared_path()
+    if ENABLE_TAILSCALE:
+        required["TAILSCALE_PATH"] = resolve_tailscale_path()
     missing = [
         f"{name}={path}"
         for name, path in required.items()
@@ -1293,6 +1297,30 @@ def terminate_service(process: subprocess.Popen[Any] | None) -> None:
     terminate_process_tree(parent)
 
 
+def disable_tailscale_endpoint() -> None:
+    if not ENABLE_TAILSCALE:
+        return
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        subprocess.run(
+            [
+                str(resolve_tailscale_path()),
+                TAILSCALE_MODE,
+                "--yes",
+                f"--https={TAILSCALE_HTTPS_PORT}",
+                "off",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=10,
+            creationflags=flags,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def detect_lan_ipv4() -> str | None:
     if os.name != "nt":
         return None
@@ -1347,6 +1375,35 @@ def local_service_url(port: int) -> str:
     return f"http://localhost:{port}/"
 
 
+def tailscale_base_url() -> str | None:
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        result = subprocess.run(
+            [str(resolve_tailscale_path()), "status", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            creationflags=flags,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        status = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    self_status = status.get("Self") if isinstance(status, dict) else None
+    dns_name = ""
+    if isinstance(self_status, dict):
+        dns_name = str(self_status.get("DNSName") or "").strip().rstrip(".")
+    if not dns_name:
+        return None
+    port_suffix = "" if TAILSCALE_HTTPS_PORT == 443 else f":{TAILSCALE_HTTPS_PORT}"
+    return f"https://{dns_name}{port_suffix}"
+
+
 def add_startup_messages() -> None:
     lan_ipv4 = detect_lan_ipv4() or "127.0.0.1"
     local_base = f"http://{lan_ipv4}"
@@ -1358,8 +1415,8 @@ def add_startup_messages() -> None:
         ),
         f'Caddy started on "{local_base}:{CADDY_PORT}"',
     ]
-    if ENABLE_CLOUDFLARE_TUNNEL:
-        public_base = CLOUDFLARE_TUNNEL_URL.rstrip("/")
+    public_base = tailscale_base_url() if ENABLE_TAILSCALE else None
+    if public_base:
         messages = [
             (
                 f"llama.cpp UI started on \"{local_base}:{LLAMA_PORT}\" "
@@ -1376,6 +1433,11 @@ def add_startup_messages() -> None:
         ]
     else:
         messages = local_messages
+        if ENABLE_TAILSCALE:
+            messages.append(
+                "Tailscale is enabled but its HTTPS URL could not be determined; "
+                "check `tailscale status` and make sure the client is signed in"
+            )
     terminal_time = datetime.now().astimezone().strftime("%H:%M:%S")
     for message in messages:
         manager._append_log("startup", message)
@@ -1450,13 +1512,15 @@ def build_service_processes() -> list[ServiceProcess]:
             ]
         )
     ]
-    if ENABLE_CLOUDFLARE_TUNNEL:
+    if ENABLE_TAILSCALE:
         services.append(
             ServiceProcess(
                 [
-                    str(resolve_cloudflared_path()),
-                    "tunnel",
-                    "run",
+                    str(resolve_tailscale_path()),
+                    TAILSCALE_MODE,
+                    "--yes",
+                    f"--https={TAILSCALE_HTTPS_PORT}",
+                    f"http://127.0.0.1:{CADDY_PORT}",
                 ]
             )
         )
@@ -1468,8 +1532,6 @@ def run() -> int:
 
     validate_configuration()
     environment = os.environ.copy()
-    if ENABLE_CLOUDFLARE_TUNNEL:
-        environment["TUNNEL_TOKEN"] = CLOUDFLARE_TUNNEL_TOKEN
     services = build_service_processes()
     for service in services:
         service.stop_existing()
@@ -1490,6 +1552,7 @@ def run() -> int:
         server.close()
         for service in reversed(services):
             terminate_service(service.process)
+        disable_tailscale_endpoint()
         if tray_icon is not None:
             tray_icon.stop()
 

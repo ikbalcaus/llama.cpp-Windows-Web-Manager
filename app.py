@@ -12,6 +12,8 @@ import signal
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.request
 import webbrowser
 from collections import deque
 from dataclasses import dataclass
@@ -129,6 +131,73 @@ WEB_FETCH_MAX_CHARS = int(
 WEB_SEARCH_MAX_TURNS = int(
     os.environ.get("WEB_SEARCH_MAX_TURNS", str(DEFAULT_AGENTIC_MAX_TURNS))
 )
+LOAD_COMFY_UI = os.environ.get(
+    "LOAD_COMFY_UI", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_COMFY_UI_DIR = (
+    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+    / "Comfy-Desktop"
+    / "ComfyUI-Installs"
+    / "ComfyUI"
+    / "ComfyUI"
+)
+COMFY_UI_DIR = Path(
+    os.environ.get("COMFY_UI_DIR", str(DEFAULT_COMFY_UI_DIR))
+).expanduser().resolve()
+COMFY_UI_PYTHON = Path(
+    os.environ.get(
+        "COMFY_UI_PYTHON", str(COMFY_UI_DIR / ".venv" / "Scripts" / "python.exe")
+    )
+).expanduser().resolve()
+COMFY_UI_MAIN = Path(
+    os.environ.get("COMFY_UI_MAIN", str(COMFY_UI_DIR / "main.py"))
+).expanduser().resolve()
+COMFY_UI_HOST = os.environ.get("COMFY_UI_HOST", "0.0.0.0").strip() or "0.0.0.0"
+COMFY_UI_PORT = int(os.environ.get("COMFY_UI_PORT", "8188"))
+COMFY_UI_ENABLE_MANAGER = os.environ.get(
+    "COMFY_UI_ENABLE_MANAGER", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+COMFY_UI_EXTRA_MODEL_PATHS_CONFIG = os.environ.get(
+    "COMFY_UI_EXTRA_MODEL_PATHS_CONFIG", ""
+).strip()
+COMFY_UI_INPUT_DIRECTORY = os.environ.get(
+    "COMFY_UI_INPUT_DIRECTORY", ""
+).strip()
+COMFY_UI_OUTPUT_DIRECTORY = os.environ.get(
+    "COMFY_UI_OUTPUT_DIRECTORY", ""
+).strip()
+
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+class EventLog:
+    """Bounded in-memory console shared by every managed process."""
+
+    def __init__(self, max_lines: int) -> None:
+        self._entries: deque[dict[str, str]] = deque(maxlen=max_lines)
+        self._lock = threading.Lock()
+
+    def append(self, source: str, message: str) -> None:
+        cleaned = ANSI_ESCAPE_RE.sub("", message).rstrip("\r\n")
+        if not cleaned:
+            return
+        with self._lock:
+            self._entries.append(
+                {"timestamp": utc_now(), "source": source, "message": cleaned}
+            )
+
+    def entries(self, limit: int) -> list[dict[str, str]]:
+        with self._lock:
+            return list(self._entries)[-limit:]
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+EVENT_LOG = EventLog(WEB_LOG_LINES)
+
 
 def generate_power_of_two_sizes(min_size: int, max_size: int) -> tuple[int, ...]:
     if min_size <= 0:
@@ -244,7 +313,6 @@ class LlamaServerManager:
         self._use_mtp: bool | None = None
         self._reasoning_budget: int | None = None
         self._started_at: str | None = None
-        self._logs: deque[dict[str, str]] = deque(maxlen=WEB_LOG_LINES)
         self._lock = threading.RLock()
 
     @staticmethod
@@ -480,13 +548,7 @@ class LlamaServerManager:
         return None
 
     def _append_log(self, source: str, message: str) -> None:
-        cleaned = message.rstrip("\r\n")
-        if not cleaned:
-            return
-        with self._lock:
-            self._logs.append(
-                {"timestamp": utc_now(), "source": source, "message": cleaned}
-            )
+        EVENT_LOG.append(source, message)
 
     def _capture_output(self, process: subprocess.Popen[str]) -> None:
         if process.stdout is None:
@@ -730,11 +792,225 @@ class LlamaServerManager:
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= WEB_LOG_LINES:
             raise ValueError(f"limit must be between 1 and {WEB_LOG_LINES}")
         with self._lock:
-            return list(self._logs)[-limit:]
+            return EVENT_LOG.entries(limit)
 
     def clear_logs(self) -> None:
         with self._lock:
-            self._logs.clear()
+            EVENT_LOG.clear()
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if self._process is None or self._process.poll() is not None:
+                return
+        try:
+            self.stop()
+        except Exception:
+            pass
+
+
+class ComfyUIServerManager:
+    """Run and track the ComfyUI web server."""
+
+    def __init__(
+        self,
+        directory: Path,
+        python: Path,
+        main: Path,
+        host: str,
+        port: int,
+    ) -> None:
+        self.directory = directory
+        self.python = python
+        self.main = main
+        self.host = host
+        self.port = port
+        self._process: subprocess.Popen[str] | None = None
+        self._started_at: str | None = None
+        self._lock = threading.RLock()
+
+    def build_command(self) -> list[str]:
+        command = [
+            str(self.python),
+            "-s",
+            str(self.main),
+            "--listen",
+            self.host,
+            "--port",
+            str(self.port),
+        ]
+        if COMFY_UI_ENABLE_MANAGER:
+            command.append("--enable-manager")
+        if COMFY_UI_EXTRA_MODEL_PATHS_CONFIG:
+            command.extend(
+                ["--extra-model-paths-config", COMFY_UI_EXTRA_MODEL_PATHS_CONFIG]
+            )
+        if COMFY_UI_INPUT_DIRECTORY:
+            command.extend(["--input-directory", COMFY_UI_INPUT_DIRECTORY])
+        if COMFY_UI_OUTPUT_DIRECTORY:
+            command.extend(["--output-directory", COMFY_UI_OUTPUT_DIRECTORY])
+        return command
+
+    def _matching_processes(self) -> list[psutil.Process]:
+        expected = normalized_path(self.python)
+        matches: list[psutil.Process] = []
+        for process in psutil.process_iter(["pid", "exe"]):
+            try:
+                executable = process.info.get("exe")
+                if (
+                    not executable
+                    or normalized_path(executable) != expected
+                    or not process.is_running()
+                ):
+                    continue
+                arguments = process.cmdline()
+                if not any(
+                    Path(argument).name.lower() == "main.py"
+                    for argument in arguments
+                ):
+                    continue
+                matches.append(process)
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                continue
+        return matches
+
+    def _capture_output(self, process: subprocess.Popen[str]) -> None:
+        if process.stdout is None:
+            return
+        try:
+            for line in iter(process.stdout.readline, ""):
+                EVENT_LOG.append("comfy-ui", line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                process.stdout.close()
+            except OSError:
+                pass
+            return_code = process.poll()
+            if return_code is not None:
+                EVENT_LOG.append(
+                    "manager", f"ComfyUI exited with code {return_code}"
+                )
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            matches = self._matching_processes()
+            process = matches[0] if matches else None
+            if process is None:
+                self._process = None
+                self._started_at = None
+                return {
+                    "enabled": LOAD_COMFY_UI,
+                    "running": False,
+                    "pid": None,
+                    "host": self.host,
+                    "port": self.port,
+                    "started_at": None,
+                    "process_count": 0,
+                    "owned": False,
+                    "directory": str(self.directory),
+                }
+            owned = self._process is not None and self._process.pid == process.pid
+            return {
+                "enabled": LOAD_COMFY_UI,
+                "running": True,
+                "pid": process.pid,
+                "host": self.host,
+                "port": self.port,
+                "started_at": self._started_at if owned else None,
+                "process_count": len(matches),
+                "owned": owned,
+                "directory": str(self.directory),
+            }
+
+    def start(self) -> dict[str, Any]:
+        with self._lock:
+            if not LOAD_COMFY_UI:
+                raise ValueError(
+                    "ComfyUI integration is disabled; set LOAD_COMFY_UI=true"
+                )
+            if not self.directory.is_dir():
+                raise FileNotFoundError(
+                    f"ComfyUI directory not found: {self.directory}"
+                )
+            if not self.python.is_file():
+                raise FileNotFoundError(
+                    f"ComfyUI Python executable not found: {self.python}"
+                )
+            if not self.main.is_file():
+                raise FileNotFoundError(f"ComfyUI main.py not found: {self.main}")
+
+            if self._matching_processes():
+                self.stop()
+
+            command = self.build_command()
+            EVENT_LOG.append("manager", subprocess.list2cmdline(command))
+
+            environment = os.environ.copy()
+            environment.setdefault("PYTHONUNBUFFERED", "1")
+            environment.setdefault("PYTHONIOENCODING", "utf-8")
+            creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(self.directory),
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    shell=False,
+                    creationflags=creation_flags,
+                )
+            except OSError as exc:
+                raise RuntimeError(f"could not start ComfyUI: {exc}") from exc
+
+            self._process = process
+            self._started_at = utc_now()
+            threading.Thread(
+                target=self._capture_output,
+                args=(process,),
+                name="comfyui-output-reader",
+                daemon=True,
+            ).start()
+            return self.status()
+
+    def stop(self) -> dict[str, Any]:
+        with self._lock:
+            for process in self._matching_processes():
+                terminate_process_tree(process)
+            self._process = None
+            self._started_at = None
+            return self.status()
+
+    def unload_models(self, timeout: float = 10.0) -> bool:
+        """Ask a running ComfyUI instance to free its loaded models."""
+        with self._lock:
+            if not self._matching_processes():
+                return False
+        payload = json.dumps(
+            {"unload_models": True, "free_memory": True}
+        ).encode("utf-8")
+        connect_host = (
+            "127.0.0.1" if self.host in {"", "0.0.0.0", "::"} else self.host
+        )
+        request = urllib.request.Request(
+            f"http://{connect_host}:{self.port}/api/free",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                response.read()
+        except (OSError, urllib.error.URLError):
+            EVENT_LOG.append("manager", "could not unload ComfyUI models")
+            return False
+        EVENT_LOG.append("manager", "ComfyUI models unloaded")
+        return True
 
     def shutdown(self) -> None:
         with self._lock:
@@ -939,6 +1215,9 @@ class ResourceMonitor:
 
 
 manager = LlamaServerManager(LLAMA_SERVER_PATH, MODELS_DIR)
+comfy_manager = ComfyUIServerManager(
+    COMFY_UI_DIR, COMFY_UI_PYTHON, COMFY_UI_MAIN, COMFY_UI_HOST, COMFY_UI_PORT
+)
 resource_monitor = ResourceMonitor()
 
 app = Flask(
@@ -999,6 +1278,7 @@ def index() -> str:
             "metrics": url_for("api_metrics"),
             "logs": url_for("api_logs"),
             "clear_logs": url_for("api_clear_logs"),
+            "unload_all": url_for("api_unload_all"),
         },
     )
 
@@ -1042,6 +1322,13 @@ def api_stop() -> Response:
     return jsonify(manager.stop())
 
 
+@app.post("/api/unload-all")
+def api_unload_all() -> Response:
+    manager.stop()
+    comfy_manager.unload_models()
+    return jsonify(manager.status())
+
+
 @app.post("/api/restart")
 def api_restart() -> tuple[Response, int] | Response:
     try:
@@ -1081,6 +1368,26 @@ def api_logs() -> tuple[Response, int] | Response:
 def api_clear_logs() -> Response:
     manager.clear_logs()
     return jsonify({"ok": True})
+
+
+@app.get("/api/comfy/status")
+def api_comfy_status() -> Response:
+    return jsonify(comfy_manager.status())
+
+
+@app.post("/api/comfy/start")
+def api_comfy_start() -> tuple[Response, int] | Response:
+    try:
+        return jsonify(comfy_manager.start())
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 409
+
+
+@app.post("/api/comfy/stop")
+def api_comfy_stop() -> Response:
+    return jsonify(comfy_manager.stop())
 
 
 @app.get("/api/command")
@@ -1166,24 +1473,25 @@ def unhandled_error(exc: Exception) -> tuple[Response, int]:
     return jsonify({"error": "internal server error"}), 500
 
 
+def default_tailscale_path() -> Path:
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    return (Path(program_files) / "Tailscale" / "tailscale.exe").resolve()
+
+
 def resolve_tailscale_path() -> Path:
     override = os.environ.get("TAILSCALE_PATH", "").strip()
     if override:
         return Path(override).expanduser().resolve()
-    local_path = (PROJECT_DIR / "tailscale.exe").resolve()
-    if local_path.is_file():
-        return local_path
+    default_path = default_tailscale_path()
+    if default_path.is_file():
+        return default_path
     discovered = shutil.which("tailscale")
     if discovered:
         return Path(discovered).resolve()
-    for program_files in (
-        os.environ.get("ProgramFiles", r"C:\Program Files"),
-        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-    ):
-        candidate = Path(program_files) / "Tailscale" / "tailscale.exe"
-        if candidate.is_file():
-            return candidate.resolve()
-    return local_path
+    local_path = (PROJECT_DIR / "tailscale.exe").resolve()
+    if local_path.is_file():
+        return local_path
+    return default_path
 
 
 def validate_configuration() -> None:
@@ -1199,9 +1507,32 @@ def validate_configuration() -> None:
         ("LLAMA_PORT", LLAMA_PORT),
         ("FLASK_PORT", FLASK_PORT),
         ("CADDY_PORT", CADDY_PORT),
+        ("COMFY_UI_PORT", COMFY_UI_PORT),
     ):
         if not 1 <= port <= 65535:
             raise ValueError(f"{name} must be between 1 and 65535")
+    if LOAD_COMFY_UI:
+        if not COMFY_UI_DIR.is_dir():
+            raise FileNotFoundError(
+                f"COMFY_UI_DIR does not exist: {COMFY_UI_DIR}"
+            )
+        required_comfy = {
+            "COMFY_UI_PYTHON": COMFY_UI_PYTHON,
+            "COMFY_UI_MAIN": COMFY_UI_MAIN,
+        }
+        if COMFY_UI_EXTRA_MODEL_PATHS_CONFIG:
+            required_comfy["COMFY_UI_EXTRA_MODEL_PATHS_CONFIG"] = Path(
+                COMFY_UI_EXTRA_MODEL_PATHS_CONFIG
+            )
+        missing_comfy = [
+            f"{name}={path}"
+            for name, path in required_comfy.items()
+            if not path.is_file()
+        ]
+        if missing_comfy:
+            raise FileNotFoundError(
+                "Missing required ComfyUI file: " + ", ".join(missing_comfy)
+            )
     if ENABLE_TAILSCALE:
         if TAILSCALE_MODE not in {"serve", "funnel"}:
             raise ValueError("TAILSCALE_MODE must be either: serve, funnel")
@@ -1438,6 +1769,10 @@ def add_startup_messages() -> None:
                 "Tailscale is enabled but its HTTPS URL could not be determined; "
                 "check `tailscale status` and make sure the client is signed in"
             )
+    if LOAD_COMFY_UI:
+        messages.append(
+            f'ComfyUI started on "{local_base}:{COMFY_UI_PORT}"'
+        )
     terminal_time = datetime.now().astimezone().strftime("%H:%M:%S")
     for message in messages:
         manager._append_log("startup", message)
@@ -1484,16 +1819,26 @@ def create_tray_icon(shutdown: Any) -> Any:
     def open_llama_ui(_: Any = None, __: Any = None) -> None:
         webbrowser.open(local_service_url(LLAMA_PORT), new=2)
 
+    def open_comfy_ui(_: Any = None, __: Any = None) -> None:
+        webbrowser.open(local_service_url(COMFY_UI_PORT), new=2)
+
     def exit_application(icon: Any, _: Any = None) -> None:
         shutdown()
         icon.stop()
 
-    menu = pystray.Menu(
+    menu_items = [
         pystray.MenuItem("Open Settings", open_settings, default=True),
         pystray.MenuItem("Open llama.cpp UI", open_llama_ui),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Exit", exit_application),
+    ]
+    if LOAD_COMFY_UI:
+        menu_items.append(pystray.MenuItem("Open ComfyUI", open_comfy_ui))
+    menu_items.extend(
+        [
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Exit", exit_application),
+        ]
     )
+    menu = pystray.Menu(*menu_items)
     return DoubleClickTrayIcon(
         "llama-cpp-manager", create_tray_image(), TRAY_TOOLTIP, menu
     )
@@ -1532,6 +1877,8 @@ def run() -> int:
 
     validate_configuration()
     environment = os.environ.copy()
+    if LOAD_COMFY_UI:
+        comfy_manager.start()
     services = build_service_processes()
     for service in services:
         service.stop_existing()
@@ -1548,6 +1895,7 @@ def run() -> int:
             return
         stopping.set()
         manager.shutdown()
+        comfy_manager.shutdown()
         resource_monitor.shutdown()
         server.close()
         for service in reversed(services):
@@ -1588,11 +1936,12 @@ def run() -> int:
 
 
 atexit.register(manager.shutdown)
+atexit.register(comfy_manager.shutdown)
 atexit.register(resource_monitor.shutdown)
 
 if __name__ == "__main__":
     try:
         raise SystemExit(run())
-    except (FileNotFoundError, OSError, ValueError) as error:
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
         print(f"Startup failed: {error}", file=sys.stderr, flush=True)
         raise SystemExit(1) from None

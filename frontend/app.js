@@ -118,7 +118,7 @@ function updateControls() {
   document.querySelectorAll(".model-card").forEach((card) => {
     card.classList.toggle("loaded", isLoaded(card.dataset.model));
   });
-  document.getElementById("refresh-button").disabled = busy;
+  document.getElementById("unload-models-button").disabled = busy;
   document.getElementById("clear-graphs-button").disabled = busy;
   document.getElementById("clear-logs-button").disabled = busy;
   contextSizeSlider.disabled = busy;
@@ -617,8 +617,8 @@ reasoningBudgetSlider.addEventListener("input", () => {
 updateContextSizeOutput();
 updateReasoningBudgetOutput();
 
-document.getElementById("refresh-button").addEventListener("click", async () => {
-  await Promise.all([loadModels(), loadStatus(), loadLogs()]);
+document.getElementById("unload-models-button").addEventListener("click", () => {
+  performAction(api.unload_all, {}, "");
 });
 document.getElementById("clear-graphs-button").addEventListener("click", () => {
   metricHistory.length = 0;

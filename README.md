@@ -8,18 +8,21 @@ optional Tailscale Serve or Funnel for remote access.
 
 ## Features
 
-- **Model manager** – load, stop, and restart GGUF models from a web UI, with
-  per-model toggles for vision (`mmproj`), web search, and MTP speculative
-  decoding, plus automatic pairing of MTP draft models and multimodal
-  projection (`mmproj`) files.
+- **Model manager** – load, stop, restart, and globally unload GGUF models from
+  a web UI, with per-model toggles for vision (`mmproj`), web search, and MTP
+  speculative decoding, plus automatic pairing of MTP draft models and
+  multimodal projection (`mmproj`) files.
 - **Flexible context sizes** – choose from context sizes generated between
   `LLAMA_MIN_CONTEXT_SIZE` and `LLAMA_MAX_CONTEXT_SIZE` (power-of-two steps).
 - **Performance tuning** – flash attention, quantized KV cache, and KV-cache
   reuse (`--cache-reuse N`) are configurable from `.env`.
+- **ComfyUI integration** – optionally starts [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
+  on a dedicated port at launch, proxies it at `/8188/`, and adds an
+  **Open ComfyUI** entry to the tray menu.
 - **Built-in web research** – an optional agentic web-search tool backed by
   DuckDuckGo and safe, public-only URL fetching.
-- **Reverse proxy** – Caddy exposes llama.cpp (`/8080/`) and the management UI
-  (`/8081/`) on a single port.
+- **Reverse proxy** – Caddy exposes llama.cpp (`/8080/`), the management UI
+  (`/8081/`), and ComfyUI (`/8188/`) on a single port.
 - **Remote access** – optional Tailscale Serve (tailnet-only) or Tailscale
   Funnel (public internet) exposes Caddy over HTTPS without port forwarding.
 - **System tray** – starts minimized, clean shutdown of every child process.
@@ -33,6 +36,7 @@ Everything runs from a single entry point, `app.py`:
                     │                  app.py                     │
                     │                                             │
   llama-server ─────┤  model process (0.0.0.0:8080)               │
+  ComfyUI ──────────┤  image server (0.0.0.0:8188, optional)      │
                     │  management UI (Waitress/Flask 0.0.0.0:8081)│
                     │  reverse proxy  (Caddy 0.0.0.0:8082)        │
                     │  remote access  (tailscale, optional)       │
@@ -41,17 +45,24 @@ Everything runs from a single entry point, `app.py`:
 
 - `llama-server` on `0.0.0.0:8080` – the model inference server, spawned only
   when you load a model from the UI.
+- ComfyUI on `0.0.0.0:8188` – the image-generation web UI, started at launch
+  when `LOAD_COMFY_UI=true`.
 - Waitress/Flask on `0.0.0.0:8081` – the management web UI and REST API.
 - Caddy on `0.0.0.0:8082` – single entry point; `/8080/` proxies to llama.cpp,
-  `/8081/` to the management UI.
+  `/8081/` to the management UI, and `/8188/` to ComfyUI.
 - `tailscale` – started only when `ENABLE_TAILSCALE=true`, forwarding the
   tailnet or public HTTPS URL to Caddy.
+
+ComfyUI is proxied under `/8188/` and is also reachable directly at
+`http://<lan-or-tailscale-ip>:8188/`. Subpath hosting works because the bundled
+ComfyUI frontend derives its API base from the current URL path.
 
 When Tailscale is enabled the routes are:
 
 ```text
 https://<machine>.<tailnet>.ts.net/8080/  -> llama.cpp
 https://<machine>.<tailnet>.ts.net/8081/  -> management UI
+https://<machine>.<tailnet>.ts.net/8188/  -> ComfyUI
 ```
 
 ## Requirements
@@ -60,6 +71,8 @@ https://<machine>.<tailnet>.ts.net/8081/  -> management UI
 - `llama-server.exe` (from a llama.cpp release, e.g. CUDA build).
 - `caddy.exe` (single static binary from <https://caddyserver.com/download>).
 - Tailscale (the Windows client) – only if you want remote access.
+- ComfyUI (optional) – only when `LOAD_COMFY_UI=true`; the manager uses the
+  installation's own `.venv\Scripts\python.exe`.
 - A `models` folder containing GGUF files.
 
 ## Windows setup
@@ -93,9 +106,10 @@ Start the entire stack with one command:
 On Windows this starts a notification-area icon:
 
 - **Double-click** – open the settings page.
-- **Right-click** – open Settings, open the llama.cpp UI, or choose **Exit**.
+- **Right-click** – open Settings, open the llama.cpp UI, open ComfyUI (when
+  enabled), or choose **Exit**.
 - **Exit** cleanly stops Waitress, Caddy, the Tailscale Serve/Funnel endpoint
-  (when enabled), and any llama-server process loaded by the UI.
+  (when enabled), ComfyUI, and any llama-server process loaded by the UI.
 
 To start minimized without a PowerShell window (e.g. from a desktop or
 Startup-folder shortcut):
@@ -119,9 +133,9 @@ In console-only mode, `Ctrl+C` performs the same clean shutdown.
 
 Child executables are started with `CREATE_NO_WINDOW` (no console windows). Caddy
 and an enabled Tailscale Serve/Funnel endpoint write their output to nowhere;
-llama-server output is kept only in bounded in-memory buffers for the website
-console. It is never printed by `app.py` and never written to a log file. The
-startup URL announcements are printed only when a console is present.
+llama-server and ComfyUI output is kept only in bounded in-memory buffers for
+the website console. It is never printed by `app.py` and never written to a log
+file. The startup URL announcements are printed only when a console is present.
 
 ## Remote access with Tailscale
 
@@ -152,9 +166,8 @@ ENABLE_TAILSCALE=false
 4. Start the app as usual. The console and startup log print the HTTPS URL, for
    example `https://my-pc.example-tailnet.ts.net/8081/`.
 
-`tailscale.exe` is resolved from `TAILSCALE_PATH`, the project directory,
-`PATH`, or the default install location
-`C:\Program Files\Tailscale\tailscale.exe`.
+`tailscale.exe` is resolved from `TAILSCALE_PATH`, the default install location
+`C:\Program Files\Tailscale\tailscale.exe`, `PATH`, or the project directory.
 
 ### Serve vs Funnel
 
@@ -169,6 +182,7 @@ Both modes proxy the same Caddy routes:
 ```text
 https://<machine>.<tailnet>.ts.net/8080/  -> llama.cpp
 https://<machine>.<tailnet>.ts.net/8081/  -> management UI
+https://<machine>.<tailnet>.ts.net/8188/  -> ComfyUI
 ```
 
 The HTTPS URL is detected automatically from `tailscale status --json`. If the
@@ -178,7 +192,54 @@ is signed in and `tailscale status` reports `Running`.
 `tailscale serve`/`funnel` runs in the foreground under `app.py`, so it stops
 when the app exits instead of leaving a persistent background configuration.
 
+## ComfyUI
+
+The optional ComfyUI integration is controlled by `LOAD_COMFY_UI`:
+
+```dotenv
+LOAD_COMFY_UI=true
+COMFY_UI_DIR=C:\Users\%USERNAME%\AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI
+COMFY_UI_HOST=0.0.0.0
+COMFY_UI_PORT=8188
+COMFY_UI_ENABLE_MANAGER=true
+COMFY_UI_EXTRA_MODEL_PATHS_CONFIG=C:\Users\%USERNAME%\AppData\Roaming\Comfy Desktop\instance-model-paths\inst-1790346569122.yaml
+COMFY_UI_INPUT_DIRECTORY=C:\Users\%USERNAME%\AppData\Local\Comfy-Desktop\ComfyUI-Shared\input
+COMFY_UI_OUTPUT_DIRECTORY=C:\Users\%USERNAME%\AppData\Local\Comfy-Desktop\ComfyUI-Shared\output
+```
+
+When enabled, `app.py` starts ComfyUI from `COMFY_UI_DIR` using its own virtual
+environment (`COMFY_UI_PYTHON`, defaulting to
+`<COMFY_UI_DIR>\.venv\Scripts\python.exe`) and runs:
+
+```text
+python.exe -s main.py --listen <host> --port <port>
+  [--enable-manager]
+  [--extra-model-paths-config <yaml>]
+  [--input-directory <path>] [--output-directory <path>]
+```
+
+The optional arguments are only added when the matching variable is set. Empty
+`COMFY_UI_EXTRA_MODEL_PATHS_CONFIG`, `COMFY_UI_INPUT_DIRECTORY`, and
+`COMFY_UI_OUTPUT_DIRECTORY` values omit their flags.
+
+ComfyUI starts automatically with the application; there are no start/stop
+controls in the management page. Its output is mixed into the website console
+under the `comfy-ui` source, and the tray menu gains an **Open ComfyUI** entry.
+Exiting the application stops the ComfyUI instance it started, but leaves an
+instance that was launched manually alone.
+
+ComfyUI is reachable through Caddy at `/8188/` and directly at
+`http://localhost:8188/` (or `http://<lan-or-tailscale-ip>:8188/`). Subpath
+hosting requires a recent ComfyUI frontend that derives its API base from
+`location.pathname`; upgrade ComfyUI if the page loads but API calls fail under
+`/8188/`.
+
 ## Model management
+
+**Unload models** in the Model Library header stops every running llama-server
+process (freeing all GGUF models) and asks a running ComfyUI instance to unload
+its models and free memory. The individual **Unload** button on a model card
+only stops the current llama-server process.
 
 ### File naming conventions
 
@@ -270,16 +331,28 @@ required and will fail startup if missing.
 | `CADDYFILE_PATH` | `<project>/Caddyfile` | Caddy configuration |
 | `CADDY_PORT` | `8082` | Caddy bind port |
 | `ENABLE_TAILSCALE` | `false` | Start `tailscale serve`/`funnel` when `true` |
-| `TAILSCALE_PATH` | *(auto)* | Path to `tailscale.exe` |
+| `TAILSCALE_PATH` | `C:\Program Files\Tailscale\tailscale.exe` | Path to `tailscale.exe`; falls back to `PATH` and the project folder |
 | `TAILSCALE_MODE` | `serve` | `serve` (tailnet-only) or `funnel` (public) |
 | `TAILSCALE_HTTPS_PORT` | `443` | HTTPS port exposed by Tailscale |
+| `LOAD_COMFY_UI` | `false` | Start and show the ComfyUI integration when `true` |
+| `COMFY_UI_DIR` | `%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI` | ComfyUI installation folder |
+| `COMFY_UI_PYTHON` | `<COMFY_UI_DIR>\.venv\Scripts\python.exe` | Python executable used to run ComfyUI |
+| `COMFY_UI_MAIN` | `<COMFY_UI_DIR>\main.py` | ComfyUI entry script |
+| `COMFY_UI_HOST` | `0.0.0.0` | ComfyUI bind host |
+| `COMFY_UI_PORT` | `8188` | ComfyUI bind port |
+| `COMFY_UI_ENABLE_MANAGER` | `true` | Adds `--enable-manager` when `true` |
+| `COMFY_UI_EXTRA_MODEL_PATHS_CONFIG` | *(empty)* | Adds `--extra-model-paths-config <yaml>` |
+| `COMFY_UI_INPUT_DIRECTORY` | *(empty)* | Adds `--input-directory <path>` |
+| `COMFY_UI_OUTPUT_DIRECTORY` | *(empty)* | Adds `--output-directory <path>` |
 | `WEB_SEARCH_MAX_RESULTS` | `5` | Max results per search (1–20) |
 | `WEB_SEARCH_TIMEOUT` | `15` | Per-request timeout in seconds (1–120) |
 | `WEB_FETCH_MAX_CHARS` | `30000` | Max characters extracted per URL (2000–100000) |
 | `WEB_SEARCH_MAX_TURNS` | `15` | Max agentic search turns (2–50) |
 
-Caddy also reads the host and port variables from the environment passed by
-`app.py`, so ports must match between the Caddyfile and `.env`.
+Caddy also reads the host and port variables (`LLAMA_*`, `FLASK_*`, and
+`COMFY_UI_*`) from the environment passed by `app.py`, so ports must match
+between the Caddyfile and `.env`. The ComfyUI route falls back to
+`127.0.0.1:8188` when `COMFY_UI_HOST`/`COMFY_UI_PORT` are unset.
 
 ### How the llama-server command is built
 
@@ -318,11 +391,15 @@ unexpected errors.
 | `GET` | `/api/status` | Current model process state |
 | `POST` | `/api/start` | Load or reload with `model`, optional `context_size`, `load_mmproj`, `web_search`, `use_mtp` |
 | `POST` | `/api/stop` | Unload the current model |
+| `POST` | `/api/unload-all` | Stop every llama-server process and unload ComfyUI models |
 | `POST` | `/api/restart` | Restart with optional `context_size`, `load_mmproj`, `web_search`, `use_mtp` |
 | `GET` | `/api/command?model=name.gguf&context_size=16384&load_mmproj=true&web_search=false&use_mtp=false` | Safe command preview |
 | `GET` | `/api/metrics` | CPU, RAM, GPU, and VRAM sample |
-| `GET` | `/api/logs?limit=120` | Recent in-memory llama-server output |
+| `GET` | `/api/logs?limit=120` | Recent in-memory llama-server and ComfyUI output |
 | `POST` | `/api/logs/clear` | Clear the website console |
+| `GET` | `/api/comfy/status` | ComfyUI process state |
+| `POST` | `/api/comfy/start` | Start ComfyUI |
+| `POST` | `/api/comfy/stop` | Stop the detected ComfyUI process |
 
 All process commands use argument lists, `shell=False`, validated model
 filenames, and absolute paths.
@@ -343,9 +420,13 @@ filenames, and absolute paths.
 - **Tailscale Serve/Funnel does not start** – run `tailscale serve status` (or
   `tailscale funnel status`) to inspect existing configuration, confirm
   `TAILSCALE_MODE`, and for Funnel use port 443, 8443, or 10000.
-- **Port conflicts** – llama-server, Flask, and Caddy use 8080, 8081, and 8082.
-  Change them together in `.env`; Caddy reads the same variables, and Tailscale
-  always targets `CADDY_PORT`.
+- **Port conflicts** – llama-server, Flask, and Caddy use 8080, 8081, and 8082;
+  ComfyUI uses 8188. Change them together in `.env`; Caddy reads the same
+  variables, and Tailscale always targets `CADDY_PORT`.
+- **ComfyUI does not start** – confirm `LOAD_COMFY_UI=true`, `COMFY_UI_DIR`
+  contains `main.py` and `.venv\Scripts\python.exe`, the optional
+  `COMFY_UI_EXTRA_MODEL_PATHS_CONFIG` file exists, and port `COMFY_UI_PORT` is
+  free. Startup errors also appear in the website console.
 - **Model not listed** – verify the file is a `.gguf` under `MODELS_DIR` and is
   not a `-mtp` draft or `-mmproj` projection file (those are intentionally
   hidden and attached to their main model).

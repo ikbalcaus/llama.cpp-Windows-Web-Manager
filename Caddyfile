@@ -27,6 +27,16 @@
 		}
 	}
 
+	@comfy_bare path /{$COMFY_UI_PORT:8188}
+	redir @comfy_bare /{$COMFY_UI_PORT:8188}/ 308
+
+	handle_path /{$COMFY_UI_PORT:8188}/* {
+		reverse_proxy {$COMFY_UI_HOST:127.0.0.1}:{$COMFY_UI_PORT:8188} {
+			header_up X-Forwarded-Prefix /{$COMFY_UI_PORT:8188}
+			header_up X-Forwarded-Proto https
+		}
+	}
+
 	handle {
 		respond "Not found" 404
 	}

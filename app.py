@@ -1511,28 +1511,6 @@ def validate_configuration() -> None:
     ):
         if not 1 <= port <= 65535:
             raise ValueError(f"{name} must be between 1 and 65535")
-    if LOAD_COMFY_UI:
-        if not COMFY_UI_DIR.is_dir():
-            raise FileNotFoundError(
-                f"COMFY_UI_DIR does not exist: {COMFY_UI_DIR}"
-            )
-        required_comfy = {
-            "COMFY_UI_PYTHON": COMFY_UI_PYTHON,
-            "COMFY_UI_MAIN": COMFY_UI_MAIN,
-        }
-        if COMFY_UI_EXTRA_MODEL_PATHS_CONFIG:
-            required_comfy["COMFY_UI_EXTRA_MODEL_PATHS_CONFIG"] = Path(
-                COMFY_UI_EXTRA_MODEL_PATHS_CONFIG
-            )
-        missing_comfy = [
-            f"{name}={path}"
-            for name, path in required_comfy.items()
-            if not path.is_file()
-        ]
-        if missing_comfy:
-            raise FileNotFoundError(
-                "Missing required ComfyUI file: " + ", ".join(missing_comfy)
-            )
     if ENABLE_TAILSCALE:
         if TAILSCALE_MODE not in {"serve", "funnel"}:
             raise ValueError("TAILSCALE_MODE must be either: serve, funnel")
@@ -1735,7 +1713,36 @@ def tailscale_base_url() -> str | None:
     return f"https://{dns_name}{port_suffix}"
 
 
-def add_startup_messages() -> None:
+def log_runtime_message(message: str) -> None:
+    EVENT_LOG.append("manager", message)
+    if sys.stdout is not None:
+        terminal_time = datetime.now().astimezone().strftime("%H:%M:%S")
+        print(f"{terminal_time} {message}", flush=True)
+
+
+def try_start_comfy_ui() -> bool:
+    try:
+        comfy_manager.start()
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        log_runtime_message(f"ComfyUI not started: {exc}")
+        return False
+    return True
+
+
+def retry_comfy_ui_start(
+    stopping: threading.Event, attempts: int = 3, delay: float = 20.0
+) -> None:
+    for _ in range(attempts):
+        if stopping.wait(delay):
+            return
+        if comfy_manager.status().get("running"):
+            return
+        if try_start_comfy_ui():
+            log_runtime_message("ComfyUI started after retry")
+            return
+
+
+def add_startup_messages(comfy_started: bool = False) -> None:
     lan_ipv4 = detect_lan_ipv4() or "127.0.0.1"
     local_base = f"http://{lan_ipv4}"
     local_messages = [
@@ -1769,7 +1776,7 @@ def add_startup_messages() -> None:
                 "Tailscale is enabled but its HTTPS URL could not be determined; "
                 "check `tailscale status` and make sure the client is signed in"
             )
-    if LOAD_COMFY_UI:
+    if LOAD_COMFY_UI and comfy_started:
         messages.append(
             f'ComfyUI started on "{local_base}:{COMFY_UI_PORT}"'
         )
@@ -1877,18 +1884,25 @@ def run() -> int:
 
     validate_configuration()
     environment = os.environ.copy()
-    if LOAD_COMFY_UI:
-        comfy_manager.start()
+    comfy_started = LOAD_COMFY_UI and try_start_comfy_ui()
     services = build_service_processes()
     for service in services:
         service.stop_existing()
     for service in services:
         service.start(environment)
-    add_startup_messages()
+    add_startup_messages(comfy_started)
 
     server = create_server(app, host=FLASK_HOST, port=FLASK_PORT, threads=8)
     stopping = threading.Event()
     tray_icon: Any | None = None
+
+    if LOAD_COMFY_UI and not comfy_started:
+        threading.Thread(
+            target=retry_comfy_ui_start,
+            args=(stopping,),
+            name="comfy-autostart",
+            daemon=True,
+        ).start()
 
     def shutdown(_: int | None = None, __: Any = None) -> None:
         if stopping.is_set():

@@ -228,6 +228,11 @@ under the `comfy-ui` source, and the tray menu gains an **Open ComfyUI** entry.
 Exiting the application stops the ComfyUI instance it started, but leaves an
 instance that was launched manually alone.
 
+If ComfyUI cannot start (missing installation, unavailable virtual environment,
+or files still locked during boot), the manager logs `ComfyUI not started: ...`
+and keeps starting llama.cpp, Caddy, Tailscale, and the management UI. It retries
+the ComfyUI start up to three times, 20 seconds apart, before giving up.
+
 ComfyUI is reachable through Caddy at `/8188/` and directly at
 `http://localhost:8188/` (or `http://<lan-or-tailscale-ip>:8188/`). Subpath
 hosting requires a recent ComfyUI frontend that derives its API base from
